@@ -29,4 +29,12 @@ jobs:
         run: swift build
 
       - name: Test
-        run: swift test
+        run: swift 
+
+  SwiftLint:
+    runs-on: ghcr.io/cirruslabs/macos-runner:sonoma
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cirruslabs/swiftlint-action@v1
+        with:
+          version: latest
