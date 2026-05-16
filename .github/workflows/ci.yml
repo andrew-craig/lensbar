@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Lint Package.swift
+        run: swift package lint-manifest
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
