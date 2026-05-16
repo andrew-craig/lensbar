@@ -42,16 +42,18 @@ final class CameraViewModel: ObservableObject {
 
     func start() {
         guard controller == nil else { return }
-        do {
-            let cam = try CameraController()
-            try cam.avf.openSession()
-            controller = cam
-            session = cam.avf.session
-            loadAVFState()
-            loadUVCState()
-            isReady = true
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                let cam = try CameraController()
+                try await cam.openSession()
+                controller = cam
+                session = cam.avf.session
+                loadAVFState()
+                loadUVCState()
+                isReady = true
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -162,7 +164,7 @@ final class CameraViewModel: ObservableObject {
         }
         if let uvc = cam.uvc {
             let mode: AEMode = exposureAuto ? .auto : .manual
-            try? uvc.setCT(.autoExposureMode, value: Int(mode.rawValue))
+            report { try uvc.setCT(.autoExposureMode, value: Int(mode.rawValue)) }
         }
     }
 
@@ -170,26 +172,35 @@ final class CameraViewModel: ObservableObject {
 
     func commitPU(_ ctrl: PUControl) {
         guard let uvc = controller?.uvc, let v = puValues[ctrl] else { return }
-        try? uvc.setPU(ctrl, value: Int16(v.rounded()))
+        report { try uvc.setPU(ctrl, value: Int16(v.rounded())) }
     }
 
     func applyWBAuto() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setPU(.whiteBalanceTempAuto, value: wbAuto ? 1 : 0)
+        report { try uvc.setPU(.whiteBalanceTempAuto, value: wbAuto ? 1 : 0) }
     }
 
     func commitZoom() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setCT(.zoomAbsolute, value: Int(zoomValue.rounded()))
+        report { try uvc.setCT(.zoomAbsolute, value: Int(zoomValue.rounded())) }
     }
 
     func commitFocusPosition() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setCT(.focusAbsolute, value: Int(focusPosition.rounded()))
+        report { try uvc.setCT(.focusAbsolute, value: Int(focusPosition.rounded())) }
     }
 
     func commitExposureTime() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setCT(.exposureTimeAbsolute, value: Int(exposureTime.rounded()))
+        report { try uvc.setCT(.exposureTimeAbsolute, value: Int(exposureTime.rounded())) }
+    }
+
+    private func report(_ work: () throws -> Void) {
+        do {
+            try work()
+            if errorMessage != nil { errorMessage = nil }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreMedia
 
 /// AVFoundation-based camera controls.
@@ -16,6 +16,10 @@ final class AVFoundationController {
     let device: AVCaptureDevice
     private(set) var session: AVCaptureSession?
 
+    // AVCaptureSession.startRunning() is blocking; Apple requires it to run
+    // off the main queue. A dedicated serial queue keeps session mutations ordered.
+    private let sessionQueue = DispatchQueue(label: "com.lensbar.session")
+
     init(device: AVCaptureDevice) {
         self.device = device
     }
@@ -31,7 +35,7 @@ final class AVFoundationController {
 
     // MARK: - Session lifecycle
 
-    func openSession(warmUp: Bool = false) throws {
+    func openSession() async throws {
         let sess = AVCaptureSession()
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -39,11 +43,11 @@ final class AVFoundationController {
         } catch {
             throw UVCError.sessionFailed(error.localizedDescription)
         }
-        sess.startRunning()
-        if warmUp {
-            // ISO / exposure duration are iOS-only AVF APIs; only the CLI 'info'
-            // path needed the warm-up. The GUI doesn't read those, so skip it.
-            Thread.sleep(forTimeInterval: 1.5)
+        await withCheckedContinuation { continuation in
+            sessionQueue.async {
+                sess.startRunning()
+                continuation.resume()
+            }
         }
         self.session = sess
     }
@@ -55,8 +59,9 @@ final class AVFoundationController {
     }
 
     func closeSession() {
-        session?.stopRunning()
+        guard let sess = session else { return }
         session = nil
+        sessionQueue.async { sess.stopRunning() }
     }
 
     // MARK: - Info

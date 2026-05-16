@@ -26,6 +26,6 @@ final class CameraController {
         }
     }
 
-    func openSession() throws { try avf.openSession() }
+    func openSession() async throws { try await avf.openSession() }
     func closeSession() { avf.closeSession() }
 }
