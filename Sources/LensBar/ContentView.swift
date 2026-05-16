@@ -6,31 +6,33 @@ struct ContentView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 0) {
                 preview
 
-                if let err = camera.errorMessage {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                VStack(alignment: .leading, spacing: 14) {
+                    if let err = camera.errorMessage {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
-                avfSection
-                Divider()
-                if camera.hasUVC {
-                    uvcSection
+                    avfSection
                     Divider()
-                    cameraTerminalSection
-                    Divider()
+                    if camera.hasUVC {
+                        uvcSection
+                        Divider()
+                        cameraTerminalSection
+                        Divider()
+                    }
+                    Button("Quit") { NSApp.terminate(nil) }
+                        .frame(maxWidth: .infinity)
                 }
-                Button("Quit") { NSApp.terminate(nil) }
-                    .frame(maxWidth: .infinity)
+                .padding(12)
             }
-            .padding(12)
-            .frame(width: 200, alignment: .leading)
+            .frame(width: 300, alignment: .leading)
         }
-        .frame(width: 200, height: 560)
+        .frame(width: 300, height: 560)
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
     }
@@ -39,8 +41,7 @@ struct ContentView: View {
 
     private var preview: some View {
         CameraPreview(session: camera.session)
-            .frame(height: 99)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .frame(height: 169)
     }
 
     // MARK: - AVFoundation section
