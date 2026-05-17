@@ -81,8 +81,24 @@ public struct ContentView: View {
             Toggle("Auto Focus", isOn: $camera.focusAuto)
                 .onChange(of: camera.focusAuto) { _ in camera.applyFocusMode() }
 
-            Toggle("Auto Exposure", isOn: $camera.exposureAuto)
-                .onChange(of: camera.exposureAuto) { _ in camera.applyExposureMode() }
+            Picker("Exposure", selection: $camera.exposureAuto) {
+                Text("Auto").tag(true)
+                Text("Manual").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: camera.exposureAuto) { _ in camera.applyExposureMode() }
+
+            if !camera.exposureAuto,
+               camera.exposureRange.upperBound > camera.exposureRange.lowerBound {
+                sliderRow(
+                    label: "",
+                    value: $camera.exposureTime,
+                    range: camera.exposureRange,
+                    commit: { camera.commitExposureTime() },
+                    disabled: false,
+                    format: { String(format: "%.1f ms", $0 / 10) }
+                )
+            }
         }
     }
 
@@ -130,16 +146,6 @@ public struct ContentView: View {
                     range: camera.focusRange,
                     commit: { camera.commitFocusPosition() },
                     disabled: camera.focusAuto
-                )
-            }
-            if camera.exposureRange.upperBound > camera.exposureRange.lowerBound {
-                sliderRow(
-                    label: "Exposure",
-                    value: $camera.exposureTime,
-                    range: camera.exposureRange,
-                    commit: { camera.commitExposureTime() },
-                    disabled: camera.exposureAuto,
-                    format: { String(format: "%.1f ms", $0 / 10) }  // 100µs units → ms
                 )
             }
         }
