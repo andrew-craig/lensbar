@@ -1,24 +1,10 @@
-//
-//  ContentView.swift
-//  LensBar
-//
-//  Created by Andrew Craig on 17/5/2026.
-//
-
 import SwiftUI
+import LensBar  // the package module
 
-struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+@main
+struct LensBarAppEntry: App {
+    var body: some Scene {
+        // delegate to the SwiftUI types that already live in the package
+        LensBarApp().body
     }
-}
-
-#Preview {
-    ContentView()
 }

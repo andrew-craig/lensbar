@@ -1,17 +1,10 @@
-//
-//  LensBarApp.swift
-//  LensBar
-//
-//  Created by Andrew Craig on 17/5/2026.
-//
-
 import SwiftUI
+import LensBar  // the package module
 
 @main
-struct LensBarApp: App {
+struct LensBarAppEntry: App {
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+        // delegate to the SwiftUI types that already live in the package
+        LensBarApp().body
     }
 }
