@@ -39,18 +39,26 @@ final class CameraViewModel: ObservableObject {
     ]
 
     private var controller: CameraController?
+    private var startTask: Task<Void, Never>?
 
     func start() {
-        guard controller == nil else { return }
-        Task { @MainActor in
+        guard controller == nil, startTask == nil else { return }
+        startTask = Task { @MainActor in
+            defer { startTask = nil }
             do {
                 let cam = try CameraController()
                 try await cam.openSession()
+                if Task.isCancelled {
+                    cam.closeSession()
+                    return
+                }
                 controller = cam
                 session = cam.avf.session
                 loadAVFState()
                 loadUVCState()
                 isReady = true
+            } catch is CancellationError {
+                return
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -58,6 +66,8 @@ final class CameraViewModel: ObservableObject {
     }
 
     func stop() {
+        startTask?.cancel()
+        startTask = nil
         controller?.closeSession()
         controller = nil
         session = nil

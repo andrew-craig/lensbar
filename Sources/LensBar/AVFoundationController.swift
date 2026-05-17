@@ -11,6 +11,7 @@ import CoreMedia
 ///
 /// A capture session must be started before querying live values (ISO,
 /// exposure duration, lens position) — openSession() handles this.
+@MainActor
 final class AVFoundationController {
 
     let device: AVCaptureDevice
@@ -24,7 +25,7 @@ final class AVFoundationController {
         self.device = device
     }
 
-    static func findOBSBOT() -> AVCaptureDevice? {
+    nonisolated static func findOBSBOT() -> AVCaptureDevice? {
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.externalUnknown, .builtInWideAngleCamera],
             mediaType: .video,
@@ -43,11 +44,16 @@ final class AVFoundationController {
         } catch {
             throw UVCError.sessionFailed(error.localizedDescription)
         }
+        let queue = sessionQueue
         await withCheckedContinuation { continuation in
-            sessionQueue.async {
+            queue.async {
                 sess.startRunning()
                 continuation.resume()
             }
+        }
+        if Task.isCancelled {
+            queue.async { sess.stopRunning() }
+            throw CancellationError()
         }
         self.session = sess
     }
