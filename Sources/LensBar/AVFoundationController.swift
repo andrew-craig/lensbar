@@ -67,9 +67,7 @@ final class AVFoundationController {
             try device.lockForConfiguration()
             device.unlockForConfiguration()
             return false
-        } catch let error as NSError
-            where error.domain == AVFoundationErrorDomain
-            && error.code == AVError.deviceInUseByAnotherApplication.rawValue {
+        } catch let error as AVError where error.code == .deviceInUseByAnotherApplication {
             return true
         } catch {
             return false
