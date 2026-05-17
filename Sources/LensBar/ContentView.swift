@@ -207,7 +207,7 @@ public struct ContentView: View {
                 Text(label)
                     .font(.caption)
                 Spacer()
-                Text(verbatim: format?(value.wrappedValue) ?? "\(Int(value.wrappedValue.rounded()))")
+                Text(verbatim: format?(value.wrappedValue.rounded()) ?? "\(Int(value.wrappedValue.rounded()))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
