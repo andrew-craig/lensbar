@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -24,6 +24,11 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreMedia"),
             ]
+        ),
+        .testTarget(
+            name: "LensBarTests",
+            dependencies: ["LensBar"],
+            path: "Tests/LensBarTests"
         ),
     ]
 )

@@ -71,16 +71,15 @@ final class IOKitUVCController {
             selector: control.rawValue,
             length: control.dataLength
         ) else { return nil }
-        return leInt(data, length: control.dataLength)
+        return Self.decodeLEInt(data, length: control.dataLength)
     }
 
     func setCT(_ control: CTControl, value: Int) throws {
-        var bytes = [UInt8](repeating: 0, count: control.dataLength)
-        for i in 0..<control.dataLength { bytes[i] = UInt8((value >> (i * 8)) & 0xFF) }
+        let data = Self.encodeLE(value: value, length: control.dataLength)
         try writeControl(
             selector: control.rawValue,
             unitID: OBSBOT.UnitID.cameraTerminal,
-            data: Data(bytes)
+            data: data
         )
     }
 
@@ -121,6 +120,22 @@ final class IOKitUVCController {
     private func readInt16(request: UInt8, unitID: UInt8, selector: UInt8, length: Int) -> Int16? {
         guard let data = readRaw(request: request, unitID: unitID, selector: selector, length: length)
         else { return nil }
+        return Self.decodeInt16(data, length: length)
+    }
+
+    // MARK: - Byte helpers (internal for testing)
+
+    /// Decode a little-endian byte buffer of up to 8 bytes as an Int.
+    /// Returns 0 for empty data; truncates if `length` exceeds `data.count`.
+    static func decodeLEInt(_ data: Data, length: Int) -> Int {
+        var result = 0
+        for i in 0..<min(length, data.count) { result |= Int(data[i]) << (i * 8) }
+        return result
+    }
+
+    /// Decode a 1- or 2-byte signed value. 1-byte values are sign-extended.
+    /// Returns nil if the buffer is too short.
+    static func decodeInt16(_ data: Data, length: Int) -> Int16? {
         if length == 1 {
             return data.isEmpty ? nil : Int16(Int8(bitPattern: data[0]))
         }
@@ -128,10 +143,11 @@ final class IOKitUVCController {
         return Int16(bitPattern: UInt16(data[0]) | (UInt16(data[1]) << 8))
     }
 
-    private func leInt(_ data: Data, length: Int) -> Int {
-        var result = 0
-        for i in 0..<min(length, data.count) { result |= Int(data[i]) << (i * 8) }
-        return result
+    /// Encode an Int as a little-endian byte buffer of the given length.
+    static func encodeLE(value: Int, length: Int) -> Data {
+        var bytes = [UInt8](repeating: 0, count: length)
+        for i in 0..<length { bytes[i] = UInt8((value >> (i * 8)) & 0xFF) }
+        return Data(bytes)
     }
 
     private func writeControl(selector: UInt8, unitID: UInt8, data: Data) throws {
