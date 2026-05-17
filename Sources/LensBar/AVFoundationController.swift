@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreMedia
 
 /// AVFoundation-based camera controls.
@@ -11,16 +11,21 @@ import CoreMedia
 ///
 /// A capture session must be started before querying live values (ISO,
 /// exposure duration, lens position) — openSession() handles this.
+@MainActor
 final class AVFoundationController {
 
     let device: AVCaptureDevice
     private(set) var session: AVCaptureSession?
 
+    // AVCaptureSession.startRunning() is blocking; Apple requires it to run
+    // off the main queue. A dedicated serial queue keeps session mutations ordered.
+    private let sessionQueue = DispatchQueue(label: "com.lensbar.session")
+
     init(device: AVCaptureDevice) {
         self.device = device
     }
 
-    static func findOBSBOT() -> AVCaptureDevice? {
+    nonisolated static func findOBSBOT() -> AVCaptureDevice? {
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.externalUnknown, .builtInWideAngleCamera],
             mediaType: .video,
@@ -31,7 +36,7 @@ final class AVFoundationController {
 
     // MARK: - Session lifecycle
 
-    func openSession(warmUp: Bool = false) throws {
+    func openSession() async throws {
         let sess = AVCaptureSession()
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -39,11 +44,16 @@ final class AVFoundationController {
         } catch {
             throw UVCError.sessionFailed(error.localizedDescription)
         }
-        sess.startRunning()
-        if warmUp {
-            // ISO / exposure duration are iOS-only AVF APIs; only the CLI 'info'
-            // path needed the warm-up. The GUI doesn't read those, so skip it.
-            Thread.sleep(forTimeInterval: 1.5)
+        let queue = sessionQueue
+        await withCheckedContinuation { continuation in
+            queue.async {
+                sess.startRunning()
+                continuation.resume()
+            }
+        }
+        if Task.isCancelled {
+            queue.async { sess.stopRunning() }
+            throw CancellationError()
         }
         self.session = sess
     }
@@ -55,8 +65,9 @@ final class AVFoundationController {
     }
 
     func closeSession() {
-        session?.stopRunning()
+        guard let sess = session else { return }
         session = nil
+        sessionQueue.async { sess.stopRunning() }
     }
 
     // MARK: - Info

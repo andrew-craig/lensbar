@@ -39,23 +39,35 @@ final class CameraViewModel: ObservableObject {
     ]
 
     private var controller: CameraController?
+    private var startTask: Task<Void, Never>?
 
     func start() {
-        guard controller == nil else { return }
-        do {
-            let cam = try CameraController()
-            try cam.avf.openSession()
-            controller = cam
-            session = cam.avf.session
-            loadAVFState()
-            loadUVCState()
-            isReady = true
-        } catch {
-            errorMessage = error.localizedDescription
+        guard controller == nil, startTask == nil else { return }
+        startTask = Task { @MainActor in
+            defer { startTask = nil }
+            do {
+                let cam = try CameraController()
+                try await cam.openSession()
+                if Task.isCancelled {
+                    cam.closeSession()
+                    return
+                }
+                controller = cam
+                session = cam.avf.session
+                loadAVFState()
+                loadUVCState()
+                isReady = true
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     func stop() {
+        startTask?.cancel()
+        startTask = nil
         controller?.closeSession()
         controller = nil
         session = nil
@@ -162,7 +174,7 @@ final class CameraViewModel: ObservableObject {
         }
         if let uvc = cam.uvc {
             let mode: AEMode = exposureAuto ? .auto : .manual
-            try? uvc.setCT(.autoExposureMode, value: Int(mode.rawValue))
+            report { try uvc.setCT(.autoExposureMode, value: Int(mode.rawValue)) }
         }
     }
 
@@ -170,26 +182,35 @@ final class CameraViewModel: ObservableObject {
 
     func commitPU(_ ctrl: PUControl) {
         guard let uvc = controller?.uvc, let v = puValues[ctrl] else { return }
-        try? uvc.setPU(ctrl, value: Int16(v.rounded()))
+        report { try uvc.setPU(ctrl, value: Int16(v.rounded())) }
     }
 
     func applyWBAuto() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setPU(.whiteBalanceTempAuto, value: wbAuto ? 1 : 0)
+        report { try uvc.setPU(.whiteBalanceTempAuto, value: wbAuto ? 1 : 0) }
     }
 
     func commitZoom() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setCT(.zoomAbsolute, value: Int(zoomValue.rounded()))
+        report { try uvc.setCT(.zoomAbsolute, value: Int(zoomValue.rounded())) }
     }
 
     func commitFocusPosition() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setCT(.focusAbsolute, value: Int(focusPosition.rounded()))
+        report { try uvc.setCT(.focusAbsolute, value: Int(focusPosition.rounded())) }
     }
 
     func commitExposureTime() {
         guard let uvc = controller?.uvc else { return }
-        try? uvc.setCT(.exposureTimeAbsolute, value: Int(exposureTime.rounded()))
+        report { try uvc.setCT(.exposureTimeAbsolute, value: Int(exposureTime.rounded())) }
+    }
+
+    private func report(_ work: () throws -> Void) {
+        do {
+            try work()
+            if errorMessage != nil { errorMessage = nil }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

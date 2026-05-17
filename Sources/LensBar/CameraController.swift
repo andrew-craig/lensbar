@@ -6,6 +6,7 @@ import AVFoundation
 ///
 /// IOKit UVC failure is non-fatal — the controller is still usable for
 /// AVFoundation operations, and `uvc` will be nil.
+@MainActor
 final class CameraController {
 
     let avf: AVFoundationController
@@ -26,6 +27,6 @@ final class CameraController {
         }
     }
 
-    func openSession() throws { try avf.openSession() }
+    func openSession() async throws { try await avf.openSession() }
     func closeSession() { avf.closeSession() }
 }
