@@ -21,11 +21,14 @@ public final class CameraViewModel: ObservableObject {
     @Published var fps: Int = 30
     @Published var focusAuto: Bool = true
     @Published var exposureAuto: Bool = true
+    @Published var focusAutoSupported: Bool = false
+    @Published var exposureAutoSupported: Bool = false
 
     // IOKit UVC — Processing Unit
     @Published var puRanges: [PUControl: ClosedRange<Double>] = [:]
     @Published var puValues: [PUControl: Double] = [:]
     @Published var wbAuto: Bool = false
+    @Published var wbAutoSupported: Bool = false
     @Published var hasUVC: Bool = false
 
     // IOKit UVC — Camera Terminal
@@ -95,8 +98,10 @@ public final class CameraViewModel: ObservableObject {
         let info = cam.avf.info()
         formats = info.formats
         formatIndex = info.formats.firstIndex(where: { $0.isActive }) ?? 0
-        focusAuto = info.focusMode == .continuousAutoFocus
-        exposureAuto = info.exposureMode == .continuousAutoExposure
+        focusAutoSupported = cam.avf.device.isFocusModeSupported(.continuousAutoFocus)
+        exposureAutoSupported = cam.avf.device.isExposureModeSupported(.continuousAutoExposure)
+        focusAuto = focusAutoSupported && info.focusMode == .continuousAutoFocus
+        exposureAuto = exposureAutoSupported && info.exposureMode == .continuousAutoExposure
         supportedFPS = formats.indices.contains(formatIndex) ? formats[formatIndex].fps : []
         let live = Int(cam.avf.currentFPS.rounded())
         fps = supportedFPS.contains(live) ? live : (supportedFPS.first ?? 30)
@@ -117,7 +122,11 @@ public final class CameraViewModel: ObservableObject {
             }
         }
         if let auto = uvc.getPU(.whiteBalanceTempAuto) {
+            wbAutoSupported = true
             wbAuto = auto != 0
+        } else {
+            wbAutoSupported = false
+            wbAuto = false
         }
         if let cur = uvc.getCT(.zoomAbsolute),
            let lo = uvc.getCT(.zoomAbsolute, request: .getMin),
