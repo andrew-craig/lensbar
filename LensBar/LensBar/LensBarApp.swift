@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LensBarCore
 
 @main
 struct LensBarApp: App {

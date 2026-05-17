@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import LensBar
+@testable import LensBarCore
 
 @Suite("IOKitUVCController byte helpers")
 struct IOKitUVCControllerBytesTests {

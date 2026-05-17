@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A native macOS menu-bar app (Swift Package at the repo root) that controls an **OBSBOT Meet SE** webcam. Two control paths are combined:
+A native macOS menu-bar app that controls an **OBSBOT Meet SE** webcam. The repo is split into a Swift Package providing the headless, testable core (`LensBarCore`) and an Xcode project (`LensBar/LensBar.xcodeproj`) that builds the `.app` bundle around it. Two control paths are combined:
 
 - **AVFoundation** — focus/exposure auto-or-locked, format and frame-rate switching.
 - **IOKit `IOUSBHostDevice`** — UVC Processing Unit, Camera Terminal, and proprietary Extension Unit controls via EP0 control transfers.
@@ -14,20 +14,28 @@ The IOKit path is what makes this app possible. macOS's `UVCAssistant` daemon ho
 ## Building and Running
 
 ```bash
+# Build & test the headless core (fast loop)
 swift build
-swift run LensBar
+swift test
+
+# Build / archive the app bundle (must go through Xcode)
+xcodebuild -project LensBar/LensBar.xcodeproj -scheme LensBar -configuration Release \
+  -archivePath build/LensBar.xcarchive archive
 ```
+
+`swift run` is not used — the `.app` bundle, entitlements, codesigning, and `MenuBarExtra` accessory activation all require the Xcode build path.
 
 ## Layout
 
-- `Package.swift` — two targets: `IOKitUSB` (ObjC, links `IOUSBHost` + `IOKit`) and `LensBar` (Swift executable, SwiftUI menu-bar UI).
+- `Package.swift` — two targets: `IOKitUSB` (ObjC, links `IOUSBHost` + `IOKit`) and `LensBarCore` (Swift library with the headless camera control + SwiftUI views). No `@main` lives in the package.
 - `Sources/IOKitUSB/UVCDeviceController.{h,m}` — thin ObjC wrapper around `IOUSBHostDevice` that sends UVC class-specific GET/SET requests on EP0. Kept in ObjC so Swift doesn't need an unsafe bridging header for IOUSBHost.
 - `Sources/LensBar/UVCTypes.swift` — `OBSBOT` constants (VID/PID, unit IDs), UVC request codes, `PUControl` / `CTControl` selectors, `AEMode` bitmap values.
 - `Sources/LensBar/IOKitUVCController.swift` — Swift façade over `UVCDeviceController`; typed get/set per control with little-endian packing.
 - `Sources/LensBar/AVFoundationController.swift` — AVFoundation focus/exposure/format/fps control. Opens an `AVCaptureSession` so the preview works and AVF state queries return live values.
 - `Sources/LensBar/CameraController.swift` — combines the two paths; IOKit failure is non-fatal.
-- `Sources/LensBar/CameraViewModel.swift` — `@MainActor` ObservableObject that drives the UI.
-- `Sources/LensBar/ContentView.swift` / `LensBarApp.swift` / `CameraPreview.swift` — SwiftUI views and menu-bar setup.
+- `Sources/LensBar/CameraViewModel.swift` — `@MainActor` ObservableObject that drives the UI. `public`.
+- `Sources/LensBar/ContentView.swift` / `CameraPreview.swift` — SwiftUI views. `ContentView` is `public`.
+- `LensBar/LensBar.xcodeproj` + `LensBar/LensBar/LensBarApp.swift` — Xcode app target. Owns the `@main App`, `MenuBarExtra` scene, and `AppDelegate` (sets `.accessory` activation). Imports `LensBarCore`. The Xcode target uses `PBXFileSystemSynchronizedRootGroup`, so any file added under `LensBar/LensBar/` is picked up automatically.
 
 ## Key Constraints
 
