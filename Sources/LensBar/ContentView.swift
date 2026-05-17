@@ -19,8 +19,10 @@ public struct ContentView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    avfSection
-                    Divider()
+                    if !camera.cameraInUse {
+                        avfSection
+                        Divider()
+                    }
                     if camera.hasUVC {
                         uvcSection
                         Divider()
@@ -42,8 +44,18 @@ public struct ContentView: View {
     // MARK: - Preview
 
     private var preview: some View {
-        CameraPreview(session: camera.session)
-            .frame(height: 169)
+        ZStack {
+            CameraPreview(session: camera.session)
+            if camera.cameraInUse {
+                Color.black
+                Text("Camera is in use by another app")
+                    .font(.callout)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+            }
+        }
+        .frame(height: 169)
     }
 
     // MARK: - AVFoundation section

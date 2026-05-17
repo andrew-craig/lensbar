@@ -58,6 +58,22 @@ final class AVFoundationController {
         self.session = sess
     }
 
+    /// Probes whether another app currently holds the camera.
+    /// `lockForConfiguration` fails with `AVErrorDeviceInUseByAnotherApplication`
+    /// (-11817) when the device is in use elsewhere. Cheap and side-effect-free
+    /// when it succeeds (immediate unlock).
+    func isDeviceBusy() -> Bool {
+        do {
+            try device.lockForConfiguration()
+            device.unlockForConfiguration()
+            return false
+        } catch let error as AVError where error.code == .deviceInUseByAnotherApplication {
+            return true
+        } catch {
+            return false
+        }
+    }
+
     var currentFPS: Double {
         let dur = device.activeVideoMinFrameDuration
         guard dur.value > 0 else { return 0 }
