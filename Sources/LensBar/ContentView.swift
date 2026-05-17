@@ -97,7 +97,7 @@ public struct ContentView: View {
                             if !editing { camera.commitFocusPosition() }
                         }
                     )
-                    Text("\(Int(camera.focusPosition))")
+                    Text(verbatim: "\(Int(camera.focusPosition.rounded()))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -167,7 +167,7 @@ public struct ContentView: View {
                             if !editing { camera.commitPU(.whiteBalanceTemperature) }
                         }
                     )
-                    Text("\(Int(camera.puValues[.whiteBalanceTemperature] ?? range.lowerBound))")
+                    Text(verbatim: "\(Int((camera.puValues[.whiteBalanceTemperature] ?? range.lowerBound).rounded()))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -207,7 +207,7 @@ public struct ContentView: View {
                 Text(label)
                     .font(.caption)
                 Spacer()
-                Text(format?(value.wrappedValue) ?? "\(Int(value.wrappedValue))")
+                Text(verbatim: format?(value.wrappedValue.rounded()) ?? "\(Int(value.wrappedValue.rounded()))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
