@@ -10,18 +10,43 @@ import IOKitUSB
 final class IOKitUVCController {
 
     private let controller: UVCDeviceController
+    private let topology: UVCTopology
+    private let supportedPU: Set<PUControl>
+    private let supportedCT: Set<CTControl>
 
-    init() throws {
-        // ObjC designated initializers with (NSError**) become throwing in Swift.
-        // The error: label is dropped; the method throws on failure.
+    init(locationID: UInt32, topology: UVCTopology) throws {
         do {
-            controller = try UVCDeviceController(vendorID: OBSBOT.vendorID, productID: OBSBOT.productID)
+            controller = try UVCDeviceController(locationID: locationID)
         } catch {
             throw UVCError.deviceOpenFailed(error.localizedDescription)
         }
+        self.topology = topology
+        self.supportedPU = Self.probePU(controller: controller, topology: topology)
+        self.supportedCT = Self.probeCT(controller: controller, topology: topology)
     }
 
     deinit { controller.closeDevice() }
+
+    /// Read the device's configuration descriptor and parse the UVC topology
+    /// (VC interface number + Camera Terminal / Processing Unit IDs). Used by
+    /// `CameraController` to discover unit IDs at runtime before constructing
+    /// an `IOKitUVCController`.
+    static func readTopology(locationID: UInt32) throws -> UVCTopology {
+        let dev: UVCDeviceController
+        do {
+            dev = try UVCDeviceController(locationID: locationID)
+        } catch {
+            throw UVCError.deviceOpenFailed(error.localizedDescription)
+        }
+        defer { dev.closeDevice() }
+        let data: Data
+        do {
+            data = try dev.getConfigurationDescriptor()
+        } catch {
+            throw UVCError.transferFailed("GET_DESCRIPTOR(configuration): \(error.localizedDescription)")
+        }
+        return try UVCDescriptorParser.parse(data)
+    }
 
     // MARK: - Processing Unit
 
@@ -33,21 +58,28 @@ final class IOKitUVCController {
         let resolution: Int16
     }
 
+    func isSupported(_ control: PUControl) -> Bool { supportedPU.contains(control) }
+    func isSupported(_ control: CTControl) -> Bool { supportedCT.contains(control) }
+
     func getPU(_ control: PUControl, request: UVCRequest = .getCurrent) -> Int16? {
-        readInt16(
+        guard let unitID = topology.processingUnit else { return nil }
+        return readInt16(
             request: request.rawValue,
-            unitID: OBSBOT.UnitID.processingUnit,
+            unitID: unitID,
             selector: control.rawValue,
             length: control.dataLength
         )
     }
 
     func setPU(_ control: PUControl, value: Int16) throws {
+        guard let unitID = topology.processingUnit else {
+            throw UVCError.invalidValue("Processing Unit not present on this device")
+        }
         var v = value
         let data = Data(bytes: &v, count: control.dataLength)
         try writeControl(
             selector: control.rawValue,
-            unitID: OBSBOT.UnitID.processingUnit,
+            unitID: unitID,
             data: data
         )
     }
@@ -65,9 +97,10 @@ final class IOKitUVCController {
     // MARK: - Camera Terminal
 
     func getCT(_ control: CTControl, request: UVCRequest = .getCurrent) -> Int? {
+        guard let unitID = topology.cameraTerminal else { return nil }
         guard let data = readRaw(
             request: request.rawValue,
-            unitID: OBSBOT.UnitID.cameraTerminal,
+            unitID: unitID,
             selector: control.rawValue,
             length: control.dataLength
         ) else { return nil }
@@ -75,44 +108,64 @@ final class IOKitUVCController {
     }
 
     func setCT(_ control: CTControl, value: Int) throws {
+        guard let unitID = topology.cameraTerminal else {
+            throw UVCError.invalidValue("Camera Terminal not present on this device")
+        }
         let data = Self.encodeLE(value: value, length: control.dataLength)
         try writeControl(
             selector: control.rawValue,
-            unitID: OBSBOT.UnitID.cameraTerminal,
+            unitID: unitID,
             data: data
         )
     }
 
-    // MARK: - Extension Unit (OBSBOT proprietary)
+    // MARK: - Capability probing
 
-    /// Raw get on the proprietary extension unit (unitID=2).
-    /// Control semantics are undocumented; returns raw bytes.
-    func getXU(selector: UInt8, request: UVCRequest = .getCurrent, length: Int) -> Data? {
-        readRaw(
-            request: request.rawValue,
-            unitID: OBSBOT.UnitID.extensionUnit,
-            selector: selector,
-            length: length
-        )
+    /// GET_INFO returns a 1-byte bitmap; bit 0 = GET supported, bit 1 = SET supported.
+    /// We treat any non-zero response as "control exists" and gate UI accordingly.
+    /// Failures (including IOKit transfer errors for missing controls) mean unsupported.
+    private static func probePU(controller: UVCDeviceController, topology: UVCTopology) -> Set<PUControl> {
+        guard let unitID = topology.processingUnit else { return [] }
+        var supported: Set<PUControl> = []
+        for ctrl in PUControl.allCases {
+            if let info = try? controller.getRequest(
+                UVCRequest.getInfo.rawValue,
+                unitID: unitID,
+                selector: ctrl.rawValue,
+                interface: topology.vcInterface,
+                length: 1
+            ), let first = info.first, first != 0 {
+                supported.insert(ctrl)
+            }
+        }
+        return supported
     }
 
-    func setXU(selector: UInt8, data: Data) throws {
-        try writeControl(
-            selector: selector,
-            unitID: OBSBOT.UnitID.extensionUnit,
-            data: data
-        )
+    private static func probeCT(controller: UVCDeviceController, topology: UVCTopology) -> Set<CTControl> {
+        guard let unitID = topology.cameraTerminal else { return [] }
+        var supported: Set<CTControl> = []
+        for ctrl in CTControl.allCases {
+            if let info = try? controller.getRequest(
+                UVCRequest.getInfo.rawValue,
+                unitID: unitID,
+                selector: ctrl.rawValue,
+                interface: topology.vcInterface,
+                length: 1
+            ), let first = info.first, first != 0 {
+                supported.insert(ctrl)
+            }
+        }
+        return supported
     }
 
     // MARK: - Private helpers
 
     private func readRaw(request: UInt8, unitID: UInt8, selector: UInt8, length: Int) -> Data? {
-        // ObjC method with (NSError**) becomes throwing in Swift; error: label is dropped.
         return try? controller.getRequest(
             request,
             unitID: unitID,
             selector: selector,
-            interface: OBSBOT.UnitID.videoControlInterface,
+            interface: topology.vcInterface,
             length: UInt16(length)
         )
     }
@@ -151,11 +204,10 @@ final class IOKitUVCController {
     }
 
     private func writeControl(selector: UInt8, unitID: UInt8, data: Data) throws {
-        // ObjC BOOL+NSError** method becomes throwing Void in Swift.
         try controller.setCurrent(
             selector,
             unitID: unitID,
-            interface: OBSBOT.UnitID.videoControlInterface,
+            interface: topology.vcInterface,
             data: data
         )
     }

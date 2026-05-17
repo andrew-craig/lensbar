@@ -12,6 +12,8 @@ public struct ContentView: View {
                 preview
 
                 VStack(alignment: .leading, spacing: 14) {
+                    devicePicker
+
                     if let err = camera.errorMessage {
                         Text(err)
                             .font(.caption)
@@ -39,6 +41,27 @@ public struct ContentView: View {
         .frame(width: 400, height: 560)
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
+    }
+
+    // MARK: - Device picker
+
+    @ViewBuilder
+    private var devicePicker: some View {
+        if camera.availableDevices.count > 1 {
+            Picker("Camera", selection: Binding(
+                get: { camera.selectedDeviceID ?? camera.availableDevices.first?.id ?? "" },
+                set: { camera.selectDevice(id: $0) }
+            )) {
+                ForEach(camera.availableDevices) { opt in
+                    Text(opt.name).tag(opt.id)
+                }
+            }
+            .pickerStyle(.menu)
+        } else if let only = camera.availableDevices.first {
+            Text(only.name)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - Preview

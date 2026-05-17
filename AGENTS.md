@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A native macOS menu-bar app that controls an **OBSBOT Meet SE** webcam. The repo is split into a Swift Package providing the headless, testable core (`LensBarCore`) and an Xcode project (`LensBar/LensBar.xcodeproj`) that builds the `.app` bundle around it. Two control paths are combined:
+A native macOS menu-bar app that controls any standards-compliant **USB Video Class (UVC)** webcam. The repo is split into a Swift Package providing the headless, testable core (`LensBarCore`) and an Xcode project (`LensBar/LensBar.xcodeproj`) that builds the `.app` bundle around it. Two control paths are combined:
 
 - **AVFoundation** — focus/exposure auto-or-locked, format and frame-rate switching.
-- **IOKit `IOUSBHostDevice`** — UVC Processing Unit, Camera Terminal, and proprietary Extension Unit controls via EP0 control transfers.
+- **IOKit `IOUSBHostDevice`** — UVC Processing Unit and Camera Terminal controls via EP0 class-specific control transfers.
 
 The IOKit path is what makes this app possible. macOS's `UVCAssistant` daemon holds exclusive ownership of `IOUSBHostInterface@0`, which blocks libusb-style access. But the *device node* (`IOUSBHostDevice`) is not held by `UVCAssistant`, so EP0 class-specific requests sent at the device level (not the interface) go through without claiming any interface.
+
+The app was originally developed against the OBSBOT Meet SE but is now camera-agnostic: unit IDs are discovered from the device's USB configuration descriptor, controls are probed via `GET_INFO`, and UI hides anything the connected camera doesn't expose.
 
 ## Building and Running
 
@@ -28,24 +30,21 @@ xcodebuild -project LensBar/LensBar.xcodeproj -scheme LensBar -configuration Rel
 ## Layout
 
 - `Package.swift` — two targets: `IOKitUSB` (ObjC, links `IOUSBHost` + `IOKit`) and `LensBarCore` (Swift library with the headless camera control + SwiftUI views). No `@main` lives in the package.
-- `Sources/IOKitUSB/UVCDeviceController.{h,m}` — thin ObjC wrapper around `IOUSBHostDevice` that sends UVC class-specific GET/SET requests on EP0. Kept in ObjC so Swift doesn't need an unsafe bridging header for IOUSBHost.
-- `Sources/LensBar/UVCTypes.swift` — `OBSBOT` constants (VID/PID, unit IDs), UVC request codes, `PUControl` / `CTControl` selectors, `AEMode` bitmap values.
-- `Sources/LensBar/IOKitUVCController.swift` — Swift façade over `UVCDeviceController`; typed get/set per control with little-endian packing.
-- `Sources/LensBar/AVFoundationController.swift` — AVFoundation focus/exposure/format/fps control. Opens an `AVCaptureSession` so the preview works and AVF state queries return live values.
-- `Sources/LensBar/CameraController.swift` — combines the two paths; IOKit failure is non-fatal.
-- `Sources/LensBar/CameraViewModel.swift` — `@MainActor` ObservableObject that drives the UI. `public`.
-- `Sources/LensBar/ContentView.swift` / `CameraPreview.swift` — SwiftUI views. `ContentView` is `public`.
+- `Sources/IOKitUSB/UVCDeviceController.{h,m}` — thin ObjC wrapper around `IOUSBHostDevice`. Sends UVC class-specific GET/SET requests on EP0, plus standard `GET_DESCRIPTOR` for runtime topology discovery. Kept in ObjC so Swift doesn't need an unsafe bridging header for IOUSBHost. Opens by USB location ID so it can pair with an arbitrary `AVCaptureDevice` (a VID/PID initializer remains for tests).
+- `Sources/LensBar/UVCTypes.swift` — UVC request codes, `PUControl` / `CTControl` selectors, `AEMode` bitmap values. All standard UVC 1.5 — no device-specific identity.
+- `Sources/LensBar/UVCDescriptorParser.swift` — pure-Swift TLV walker over a USB configuration descriptor. Extracts the VideoControl interface number, Camera Terminal ID (input terminal with `wTerminalType=0x0201`), and Processing Unit ID. Either unit may be nil; the UI degrades accordingly.
+- `Sources/LensBar/IOKitUVCController.swift` — Swift façade over `UVCDeviceController`. Takes a discovered `UVCTopology` at init, probes per-control support via `GET_INFO`, exposes typed get/set per control with little-endian packing. `readTopology(locationID:)` is the static entry point used during connect.
+- `Sources/LensBar/AVFoundationController.swift` — AVFoundation focus/exposure/format/fps control. `enumerateCameras()` lists every external + built-in video device for the picker. Opens an `AVCaptureSession` so the preview works and AVF state queries return live values.
+- `Sources/LensBar/CameraController.swift` — combines the two paths for a chosen `AVCaptureDevice`. Parses the device's `uniqueID` into a USB location ID, reads the configuration descriptor, builds the IOKit controller from the discovered topology. IOKit failure is non-fatal — virtual cameras and non-UVC devices degrade to AVFoundation-only.
+- `Sources/LensBar/CameraViewModel.swift` — `@MainActor` ObservableObject that drives the UI. Owns the camera picker (`availableDevices`, `selectedDeviceID` persisted in `UserDefaults`) and gates UVC slider loading on the per-control capability probe.
+- `Sources/LensBar/ContentView.swift` / `CameraPreview.swift` — SwiftUI views. `ContentView` is `public`. Shows a device picker when more than one camera is present.
 - `LensBar/LensBar.xcodeproj` + `LensBar/LensBar/LensBarApp.swift` — Xcode app target. Owns the `@main App`, `MenuBarExtra` scene, and `AppDelegate` (sets `.accessory` activation). Imports `LensBarCore`. The Xcode target uses `PBXFileSystemSynchronizedRootGroup`, so any file added under `LensBar/LensBar/` is picked up automatically.
 
 ## Key Constraints
 
-- The UVC `CT_AE_MODE_CONTROL` must be set to manual (bitmap `0x01`) before `CT_EXPOSURE_TIME_ABSOLUTE_CONTROL` writes will take effect. `CameraViewModel.applyExposureMode` handles this when the auto-exposure toggle flips.
+- The UVC `CT_AE_MODE_CONTROL` must be set to manual (bitmap `0x01`) before `CT_EXPOSURE_TIME_ABSOLUTE_CONTROL` writes will take effect. `CameraViewModel.applyExposureMode` handles this when the auto-exposure toggle flips, and only when the control is supported.
 - Exposure time is in **100µs units** per UVC spec (`1` = 0.1ms, `10000` = 1s).
 - `iso`, `exposureDuration`, `lensPosition` are iOS-only AVFoundation properties — do not try to access them on macOS. Manual exposure/focus values must go through the UVC path instead.
-- The proprietary Extension Unit (`unitID=2`, GUID `{9a1e7291-6843-4683-6d92-39bc7906ee49}`) has 7 controls; they're readable/writable but their semantics are undocumented (presumed OBSBOT AI tracking, gesture, zoom assist).
-
-## Device Identity
-
-- Name: `OBSBOT Meet SE` (matched by `localizedName.contains` in `AVFoundationController.findOBSBOT`)
-- VID/PID: `0x3564` / `0xFEFE`
-- UVC unit IDs: Camera Terminal = 1, Extension Unit = 2, Processing Unit = 3, VideoControl interface = 0
+- UVC unit IDs are **discovered at runtime** by parsing the configuration descriptor (USB `GET_DESCRIPTOR` for type=0x02). Do not hardcode them — they vary per camera vendor.
+- AVCaptureDevice ↔ IOUSBHostDevice pairing uses the IOKit **location ID** parsed from `AVCaptureDevice.uniqueID`. Virtual cameras (OBS Virtual Cam, Continuity Camera, mmhmm) don't have a parseable location ID and silently fall back to AVF-only.
+- The app sandbox is OFF (`ENABLE_APP_SANDBOX = NO`), so no extra entitlements are needed for `IOUSBHostDevice` access to arbitrary cameras.

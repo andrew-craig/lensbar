@@ -7,11 +7,21 @@ public final class CameraViewModel: ObservableObject {
 
     public init() {}
 
+    public struct CameraOption: Identifiable, Equatable {
+        public let id: String
+        public let name: String
+    }
+
+    private static let selectedDeviceDefaultsKey = "lensbar.selectedCameraID"
 
     // Lifecycle
     @Published var isReady = false
     @Published var errorMessage: String?
     @Published var cameraInUse = false
+
+    // Device picker
+    @Published var availableDevices: [CameraOption] = []
+    @Published var selectedDeviceID: String?
 
     // AVFoundation
     @Published var session: AVCaptureSession?
@@ -50,10 +60,45 @@ public final class CameraViewModel: ObservableObject {
 
     func start() {
         guard controller == nil, startTask == nil else { return }
+        refreshDeviceList()
+        guard let device = chooseDevice() else {
+            errorMessage = UVCError.deviceNotFound.localizedDescription
+            return
+        }
+        selectedDeviceID = device.uniqueID
+        launch(device: device)
+    }
+
+    func stop() {
+        startTask?.cancel()
+        startTask = nil
+        controller?.closeSession()
+        controller = nil
+        session = nil
+        isReady = false
+        cameraInUse = false
+    }
+
+    /// Switch to the camera with the given uniqueID. Tears down any in-flight
+    /// or open session and re-runs the setup pipeline for the new device.
+    func selectDevice(id: String) {
+        guard id != selectedDeviceID else { return }
+        stop()
+        UserDefaults.standard.set(id, forKey: Self.selectedDeviceDefaultsKey)
+        selectedDeviceID = id
+        resetPublishedState()
+        guard let device = AVFoundationController.enumerateCameras().first(where: { $0.uniqueID == id }) else {
+            errorMessage = UVCError.deviceNotFound.localizedDescription
+            return
+        }
+        launch(device: device)
+    }
+
+    private func launch(device: AVCaptureDevice) {
         startTask = Task { @MainActor in
             defer { startTask = nil }
             do {
-                let cam = try CameraController()
+                let cam = CameraController(device: device)
                 try await cam.openSession()
                 if Task.isCancelled {
                     cam.closeSession()
@@ -68,11 +113,13 @@ public final class CameraViewModel: ObservableObject {
                     // which fails when another app holds the camera.
                     loadUVCState()
                     isReady = true
+                    UserDefaults.standard.set(device.uniqueID, forKey: Self.selectedDeviceDefaultsKey)
                     return
                 }
                 loadAVFState()
                 loadUVCState()
                 isReady = true
+                UserDefaults.standard.set(device.uniqueID, forKey: Self.selectedDeviceDefaultsKey)
             } catch is CancellationError {
                 return
             } catch {
@@ -81,14 +128,43 @@ public final class CameraViewModel: ObservableObject {
         }
     }
 
-    func stop() {
-        startTask?.cancel()
-        startTask = nil
-        controller?.closeSession()
-        controller = nil
-        session = nil
-        isReady = false
-        cameraInUse = false
+    /// Clear published state when switching devices so stale slider ranges,
+    /// values, and capability flags don't bleed across cameras.
+    private func resetPublishedState() {
+        errorMessage = nil
+        formats = []
+        formatIndex = 0
+        supportedFPS = []
+        puRanges = [:]
+        puValues = [:]
+        wbAuto = false
+        wbAutoSupported = false
+        hasUVC = false
+        zoomRange = 0...0
+        zoomValue = 0
+        focusRange = 0...0
+        focusPosition = 0
+        exposureRange = 0...0
+        exposureTime = 0
+        focusAutoSupported = false
+        exposureAutoSupported = false
+    }
+
+    private func refreshDeviceList() {
+        availableDevices = AVFoundationController.enumerateCameras().map {
+            CameraOption(id: $0.uniqueID, name: $0.localizedName)
+        }
+    }
+
+    /// Pick the device to use on launch: the persisted last selection if it's
+    /// still plugged in, otherwise the first available camera.
+    private func chooseDevice() -> AVCaptureDevice? {
+        let devices = AVFoundationController.enumerateCameras()
+        let saved = UserDefaults.standard.string(forKey: Self.selectedDeviceDefaultsKey)
+        if let saved, let match = devices.first(where: { $0.uniqueID == saved }) {
+            return match
+        }
+        return devices.first
     }
 
     // MARK: - AVFoundation state
@@ -115,34 +191,37 @@ public final class CameraViewModel: ObservableObject {
             return
         }
         hasUVC = true
-        for ctrl in Self.sliderControls {
+        for ctrl in Self.sliderControls where uvc.isSupported(ctrl) {
             if let r = uvc.getPURange(ctrl) {
                 puRanges[ctrl] = Double(r.min)...Double(r.max)
                 puValues[ctrl] = Double(r.current)
             }
         }
-        if let auto = uvc.getPU(.whiteBalanceTempAuto) {
+        if uvc.isSupported(.whiteBalanceTempAuto), let auto = uvc.getPU(.whiteBalanceTempAuto) {
             wbAutoSupported = true
             wbAuto = auto != 0
         } else {
             wbAutoSupported = false
             wbAuto = false
         }
-        if let cur = uvc.getCT(.zoomAbsolute),
+        if uvc.isSupported(.zoomAbsolute),
+           let cur = uvc.getCT(.zoomAbsolute),
            let lo = uvc.getCT(.zoomAbsolute, request: .getMin),
            let hi = uvc.getCT(.zoomAbsolute, request: .getMax),
            hi > lo {
             zoomRange = Double(lo)...Double(hi)
             zoomValue = Double(cur)
         }
-        if let cur = uvc.getCT(.focusAbsolute),
+        if uvc.isSupported(.focusAbsolute),
+           let cur = uvc.getCT(.focusAbsolute),
            let lo = uvc.getCT(.focusAbsolute, request: .getMin),
            let hi = uvc.getCT(.focusAbsolute, request: .getMax),
            hi > lo {
             focusRange = Double(lo)...Double(hi)
             focusPosition = Double(cur)
         }
-        if let cur = uvc.getCT(.exposureTimeAbsolute),
+        if uvc.isSupported(.exposureTimeAbsolute),
+           let cur = uvc.getCT(.exposureTimeAbsolute),
            let lo = uvc.getCT(.exposureTimeAbsolute, request: .getMin),
            let hi = uvc.getCT(.exposureTimeAbsolute, request: .getMax),
            hi > lo {
@@ -195,7 +274,7 @@ public final class CameraViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
-        if let uvc = cam.uvc {
+        if let uvc = cam.uvc, uvc.isSupported(.autoExposureMode) {
             let mode: AEMode = exposureAuto ? .auto : .manual
             report { try uvc.setCT(.autoExposureMode, value: Int(mode.rawValue)) }
         }

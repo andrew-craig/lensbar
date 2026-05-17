@@ -9,32 +9,12 @@ enum UVCError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .deviceNotFound:        return "\(OBSBOT.name) not found"
+        case .deviceNotFound:        return "No UVC camera found"
         case .deviceOpenFailed(let m): return "Failed to open USB device: \(m)"
         case .transferFailed(let m):   return "USB control transfer failed: \(m)"
         case .invalidValue(let m):     return "Invalid value: \(m)"
         case .sessionFailed(let m):    return "AVFoundation session error: \(m)"
         }
-    }
-}
-
-// MARK: - Device identity
-
-enum OBSBOT {
-    static let vendorID:  UInt16 = 0x3564
-    static let productID: UInt16 = 0xFEFE
-    static let name = "OBSBOT Meet SE"
-
-    // UVC unit/terminal IDs discovered from the USB descriptor.
-    enum UnitID {
-        static let cameraTerminal:         UInt8 = 1
-        static let extensionUnit:          UInt8 = 2  // GUID {9a1e7291-6843-4683-6d92-39bc7906ee49}
-        static let processingUnit:         UInt8 = 3
-        static let videoControlInterface:  UInt8 = 0
-    }
-
-    enum ExtensionUnit {
-        static let numControls = 7
     }
 }
 

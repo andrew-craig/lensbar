@@ -4,19 +4,6 @@ import Testing
 @Suite("UVC type definitions")
 struct UVCTypesTests {
 
-    // MARK: - Device identity
-
-    @Test func obsbotIdentity() {
-        #expect(OBSBOT.vendorID == 0x3564)
-        #expect(OBSBOT.productID == 0xFEFE)
-        #expect(OBSBOT.name == "OBSBOT Meet SE")
-        #expect(OBSBOT.UnitID.cameraTerminal == 1)
-        #expect(OBSBOT.UnitID.extensionUnit == 2)
-        #expect(OBSBOT.UnitID.processingUnit == 3)
-        #expect(OBSBOT.UnitID.videoControlInterface == 0)
-        #expect(OBSBOT.ExtensionUnit.numControls == 7)
-    }
-
     // MARK: - UVC request codes (UVC 1.5 §A.14/§A.15)
 
     @Test func uvcRequestRawValues() {
