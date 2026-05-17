@@ -1,5 +1,5 @@
 import Testing
-@testable import LensBar
+@testable import LensBarCore
 
 @Suite("CameraViewModel static invariants")
 @MainActor

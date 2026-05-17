@@ -3,7 +3,10 @@ import AVFoundation
 import Combine
 
 @MainActor
-final class CameraViewModel: ObservableObject {
+public final class CameraViewModel: ObservableObject {
+
+    public init() {}
+
 
     // Lifecycle
     @Published var isReady = false

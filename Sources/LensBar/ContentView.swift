@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
 
-struct ContentView: View {
+public struct ContentView: View {
     @EnvironmentObject var camera: CameraViewModel
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 preview

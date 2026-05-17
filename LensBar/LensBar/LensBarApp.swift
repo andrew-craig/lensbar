@@ -1,10 +1,25 @@
 import SwiftUI
-import LensBar  // the package module
+import AppKit
+import LensBarCore
 
 @main
-struct LensBarAppEntry: App {
+struct LensBarApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var camera = CameraViewModel()
+
     var body: some Scene {
-        // delegate to the SwiftUI types that already live in the package
-        LensBarApp().body
+        MenuBarExtra {
+            ContentView()
+                .environmentObject(camera)
+        } label: {
+            Image(systemName: "circle")
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
     }
 }

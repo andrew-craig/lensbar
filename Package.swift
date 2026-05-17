@@ -5,7 +5,7 @@ let package = Package(
     name: "LensBar",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "LensBarCore", targets: ["LensBar"]),
+        .library(name: "LensBarCore", targets: ["LensBarCore"]),
     ],
     targets: [
         // Thin ObjC wrapper around IOUSBHost.framework for UVC control transfers.
@@ -20,7 +20,7 @@ let package = Package(
             ]
         ),
         .target(
-            name: "LensBar",
+            name: "LensBarCore",
             dependencies: ["IOKitUSB"],
             path: "Sources/LensBar",
             linkerSettings: [
@@ -30,7 +30,7 @@ let package = Package(
         ),
         .testTarget(
             name: "LensBarTests",
-            dependencies: ["LensBar"],
+            dependencies: ["LensBarCore"],
             path: "Tests/LensBarTests"
         ),
     ]
