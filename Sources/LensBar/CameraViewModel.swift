@@ -11,6 +11,7 @@ public final class CameraViewModel: ObservableObject {
     // Lifecycle
     @Published var isReady = false
     @Published var errorMessage: String?
+    @Published var cameraInUse = false
 
     // AVFoundation
     @Published var session: AVCaptureSession?
@@ -57,6 +58,15 @@ public final class CameraViewModel: ObservableObject {
                 }
                 controller = cam
                 session = cam.avf.session
+                if cam.avf.isDeviceBusy() {
+                    cameraInUse = true
+                    // Skip AVF state load — populating @Published values would
+                    // trigger SwiftUI onChange handlers that call lockForConfiguration,
+                    // which fails when another app holds the camera.
+                    loadUVCState()
+                    isReady = true
+                    return
+                }
                 loadAVFState()
                 loadUVCState()
                 isReady = true
@@ -75,6 +85,7 @@ public final class CameraViewModel: ObservableObject {
         controller = nil
         session = nil
         isReady = false
+        cameraInUse = false
     }
 
     // MARK: - AVFoundation state
