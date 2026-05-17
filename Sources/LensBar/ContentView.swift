@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 public struct ContentView: View {
     @EnvironmentObject var camera: CameraViewModel
@@ -34,9 +34,9 @@ public struct ContentView: View {
                 }
                 .padding(12)
             }
-            .frame(width: 300, alignment: .leading)
+            .frame(width: 400, alignment: .leading)
         }
-        .frame(width: 300, height: 560)
+        .frame(width: 400, height: 560)
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
     }
@@ -55,49 +55,77 @@ public struct ContentView: View {
                     .padding(.horizontal, 16)
             }
         }
-        .frame(height: 169)
+        .frame(height: 225)
     }
 
     // MARK: - AVFoundation section
 
     private var avfSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Format", selection: $camera.formatIndex) {
-                ForEach(camera.formats, id: \.index) { fmt in
-                    Text("\(fmt.width)×\(fmt.height)").tag(fmt.index)
+            HStack(spacing: 16) {
+                Picker("Format", selection: $camera.formatIndex) {
+                    ForEach(camera.formats, id: \.index) { fmt in
+                        Text(verbatim: "\(fmt.width)×\(fmt.height)").tag(fmt.index)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: camera.formatIndex) { new in camera.applyFormat(new) }
+
+                Picker("FPS", selection: $camera.fps) {
+                    ForEach(camera.supportedFPS, id: \.self) { f in
+                        Text("\(f)").tag(f)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: camera.fps) { new in camera.applyFPS(new) }
+            }
+
+            HStack(spacing: 8) {
+                Toggle("Auto Focus", isOn: $camera.focusAuto)
+                    .toggleStyle(.switch)
+                    .fixedSize()
+                    .disabled(!camera.focusAutoSupported)
+                    .onChange(of: camera.focusAuto) { _ in camera.applyFocusMode() }
+
+                if !camera.focusAuto,
+                    camera.focusRange.upperBound > camera.focusRange.lowerBound
+                {
+                    Slider(
+                        value: $camera.focusPosition,
+                        in: camera.focusRange,
+                        onEditingChanged: { editing in
+                            if !editing { camera.commitFocusPosition() }
+                        }
+                    )
+                    Text("\(Int(camera.focusPosition))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
             }
-            .pickerStyle(.menu)
-            .onChange(of: camera.formatIndex) { new in camera.applyFormat(new) }
 
-            Picker("FPS", selection: $camera.fps) {
-                ForEach(camera.supportedFPS, id: \.self) { f in
-                    Text("\(f)").tag(f)
+            HStack(spacing: 8) {
+                Toggle("Auto Exposure", isOn: $camera.exposureAuto)
+                    .toggleStyle(.switch)
+                    .fixedSize()
+                    .disabled(!camera.exposureAutoSupported)
+                    .onChange(of: camera.exposureAuto) { _ in camera.applyExposureMode() }
+
+                if !camera.exposureAuto,
+                    camera.exposureRange.upperBound > camera.exposureRange.lowerBound
+                {
+                    Slider(
+                        value: $camera.exposureTime,
+                        in: camera.exposureRange,
+                        onEditingChanged: { editing in
+                            if !editing { camera.commitExposureTime() }
+                        }
+                    )
+                    Text(String(format: "%.1f ms", camera.exposureTime / 10))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
-            }
-            .pickerStyle(.menu)
-            .onChange(of: camera.fps) { new in camera.applyFPS(new) }
-
-            Toggle("Auto Focus", isOn: $camera.focusAuto)
-                .onChange(of: camera.focusAuto) { _ in camera.applyFocusMode() }
-
-            Picker("Exposure", selection: $camera.exposureAuto) {
-                Text("Auto").tag(true)
-                Text("Manual").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: camera.exposureAuto) { _ in camera.applyExposureMode() }
-
-            if !camera.exposureAuto,
-               camera.exposureRange.upperBound > camera.exposureRange.lowerBound {
-                sliderRow(
-                    label: "",
-                    value: $camera.exposureTime,
-                    range: camera.exposureRange,
-                    commit: { camera.commitExposureTime() },
-                    disabled: false,
-                    format: { String(format: "%.1f ms", $0 / 10) }
-                )
             }
         }
     }
@@ -107,7 +135,7 @@ public struct ContentView: View {
     private var uvcSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(CameraViewModel.sliderControls, id: \.self) { ctrl in
-                if let range = camera.puRanges[ctrl] {
+                if ctrl != .whiteBalanceTemperature, let range = camera.puRanges[ctrl] {
                     sliderRow(
                         label: ctrl.displayName,
                         value: Binding(
@@ -116,13 +144,35 @@ public struct ContentView: View {
                         ),
                         range: range,
                         commit: { camera.commitPU(ctrl) },
-                        disabled: ctrl == .whiteBalanceTemperature && camera.wbAuto
+                        disabled: false
                     )
                 }
             }
 
-            Toggle("Auto White Balance", isOn: $camera.wbAuto)
-                .onChange(of: camera.wbAuto) { _ in camera.applyWBAuto() }
+            HStack(spacing: 8) {
+                Toggle("Auto White Balance", isOn: $camera.wbAuto)
+                    .toggleStyle(.switch)
+                    .fixedSize()
+                    .disabled(!camera.wbAutoSupported)
+                    .onChange(of: camera.wbAuto) { _ in camera.applyWBAuto() }
+
+                if !camera.wbAuto, let range = camera.puRanges[.whiteBalanceTemperature] {
+                    Slider(
+                        value: Binding(
+                            get: { camera.puValues[.whiteBalanceTemperature] ?? range.lowerBound },
+                            set: { camera.puValues[.whiteBalanceTemperature] = $0 }
+                        ),
+                        in: range,
+                        onEditingChanged: { editing in
+                            if !editing { camera.commitPU(.whiteBalanceTemperature) }
+                        }
+                    )
+                    Text("\(Int(camera.puValues[.whiteBalanceTemperature] ?? range.lowerBound))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
         }
     }
 
@@ -137,15 +187,6 @@ public struct ContentView: View {
                     range: camera.zoomRange,
                     commit: { camera.commitZoom() },
                     disabled: false
-                )
-            }
-            if camera.focusRange.upperBound > camera.focusRange.lowerBound {
-                sliderRow(
-                    label: "Focus Position",
-                    value: $camera.focusPosition,
-                    range: camera.focusRange,
-                    commit: { camera.commitFocusPosition() },
-                    disabled: camera.focusAuto
                 )
             }
         }
