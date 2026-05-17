@@ -1,7 +1,13 @@
 name: Release
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the release (e.g. v0.1.0)'
+        required: true
 
 permissions:
   contents: write
@@ -11,6 +17,14 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Import signing certificate
         env:
@@ -52,6 +66,8 @@ jobs:
           xcodebuild -project LensBar/LensBar.xcodeproj \
             -scheme LensBar -configuration Release \
             -archivePath build/LensBar.xcarchive archive \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGN_IDENTITY="${{ secrets.DEVELOPER_ID_IDENTITY }}" \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${{ secrets.DEVELOPMENT_TEAM }}" \
@@ -95,3 +111,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: LensBar.dmg
+          tag_name: ${{ steps.version.outputs.tag }}
