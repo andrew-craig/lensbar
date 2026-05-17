@@ -4,3 +4,5 @@
 *.d
 DerivedData/
 *.xcuserstate
+.claude/
+build/
