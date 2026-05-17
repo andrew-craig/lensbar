@@ -44,23 +44,6 @@ jobs:
             -s -k "$KC_PW" build.keychain
           rm cert.p12
 
-      - name: Write ExportOptions.plist
-        env:
-          TEAM_ID: ${{ secrets.DEVELOPMENT_TEAM }}
-        run: |
-          cat > ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>developer-id</string>
-            <key>teamID</key><string>${TEAM_ID}</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>destination</key><string>export</string>
-          </dict>
-          </plist>
-          EOF
-
       - name: Build & archive
         run: |
           xcodebuild -project LensBar/LensBar.xcodeproj \
