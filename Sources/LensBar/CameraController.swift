@@ -12,38 +12,66 @@ import AVFoundation
 final class CameraController {
 
     let avf: AVFoundationController
-    let uvc: IOKitUVCController?
+    private(set) var uvc: IOKitUVCController?
+    let device: AVCaptureDevice
 
     init(device: AVCaptureDevice) {
-        avf = AVFoundationController(device: device)
-
-        if let locationID = Self.locationID(for: device) {
-            do {
-                let topology = try IOKitUVCController.readTopology(locationID: locationID)
-                uvc = try IOKitUVCController(locationID: locationID, topology: topology)
-            } catch {
-                uvc = nil
-                fputs("Info: IOKit UVC unavailable for \(device.localizedName) " +
-                      "(\(error.localizedDescription)) — only AVFoundation controls available\n", stderr)
-            }
-        } else {
-            uvc = nil
-        }
+        self.device = device
+        self.avf = AVFoundationController(device: device)
     }
 
-    func openSession() async throws { try await avf.openSession() }
+    /// Open the capture session and, in parallel, read the UVC topology and
+    /// probe per-control support off the main thread. The probe is ~20 USB
+    /// control transfers and can take 100–200ms; doing it off-main keeps the
+    /// menu-bar UI from hitching during camera switch.
+    func openSession() async throws {
+        let locationID = Self.locationID(for: device)
+        let deviceName = device.localizedName
+
+        async let avfOpen: Void = avf.openSession()
+        async let uvcSetup: IOKitUVCController? = Self.connectUVC(
+            locationID: locationID,
+            deviceName: deviceName
+        )
+
+        try await avfOpen
+        self.uvc = await uvcSetup
+    }
+
     func closeSession() { avf.closeSession() }
 
+    private nonisolated static func connectUVC(
+        locationID: UInt32?,
+        deviceName: String
+    ) async -> IOKitUVCController? {
+        guard let locationID else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            do {
+                let topology = try IOKitUVCController.readTopology(locationID: locationID)
+                return try IOKitUVCController(locationID: locationID, topology: topology)
+            } catch {
+                fputs("Info: IOKit UVC unavailable for \(deviceName) " +
+                      "(\(error.localizedDescription)) — only AVFoundation controls available\n", stderr)
+                return nil
+            }
+        }.value
+    }
+
     /// Extract the IOKit USB location ID from an AVCaptureDevice's `uniqueID`.
-    /// On macOS this is typically an 8-hex-digit value, sometimes prefixed with
-    /// "0x" and sometimes followed by additional identifiers (e.g. a serial).
+    /// On macOS, `uniqueID` for a USB camera typically looks like the 8-hex-digit
+    /// location ID concatenated with an additional vendor/serial suffix (e.g.
+    /// `"0x14200000046d082d"`). Take only the first 8 hex digits; the rest is
+    /// not part of the location ID and would overflow UInt32.
     /// Returns nil for devices without a parseable location ID — virtual cameras,
     /// Continuity Camera, the iOS simulator.
     static func locationID(for device: AVCaptureDevice) -> UInt32? {
-        var id = device.uniqueID
-        // Strip leading "0x" if present, then take the longest leading run of hex digits.
+        locationID(fromUniqueID: device.uniqueID)
+    }
+
+    static func locationID(fromUniqueID uniqueID: String) -> UInt32? {
+        var id = uniqueID
         if id.hasPrefix("0x") || id.hasPrefix("0X") { id.removeFirst(2) }
-        let hex = id.prefix(while: \.isHexDigit)
+        let hex = id.prefix(while: \.isHexDigit).prefix(8)
         guard !hex.isEmpty else { return nil }
         return UInt32(hex, radix: 16)
     }

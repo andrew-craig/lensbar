@@ -3,7 +3,7 @@ import Foundation
 /// Unit IDs discovered from a USB Video Class configuration descriptor.
 /// Any of the unit IDs may be nil if the device doesn't expose that unit —
 /// callers should hide UI for controls that depend on a missing unit.
-struct UVCTopology: Equatable {
+struct UVCTopology: Equatable, Sendable {
     let vcInterface: UInt8
     let cameraTerminal: UInt8?
     let processingUnit: UInt8?

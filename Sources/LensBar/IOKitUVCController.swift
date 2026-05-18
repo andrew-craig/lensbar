@@ -7,7 +7,12 @@ import IOKitUSB
 ///
 /// Failure to open the device (e.g. if macOS ever restricts device-level access)
 /// is surfaced as a throwing init; callers can fall back gracefully.
-final class IOKitUVCController {
+///
+/// `@unchecked Sendable`: all stored properties are immutable lets; the underlying
+/// `IOUSBHostDevice` (held by `UVCDeviceController`) accepts `sendDeviceRequest`
+/// from any thread. This lets `CameraController` build the controller in a
+/// detached task off the main actor.
+final class IOKitUVCController: @unchecked Sendable {
 
     private let controller: UVCDeviceController
     private let topology: UVCTopology
