@@ -196,14 +196,22 @@ final class IOKitUVCController: @unchecked Sendable {
             log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO failed (\(error.localizedDescription, privacy: .public)) — trying GET_CUR fallback")
         }
         do {
-            _ = try controller.getRequest(
+            let data = try controller.getRequest(
                 UVCRequest.getCurrent.rawValue,
                 unitID: unitID,
                 selector: selector,
                 interface: interface,
                 length: UInt16(dataLength)
             )
-            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR ok -> supported")
+            // A truthful GET_CUR for a real control returns dataLength bytes. An
+            // empty response means the device acked the request but provided no
+            // value — treat that as "control isn't really there" so we don't
+            // surface a slider that can't read or write a value.
+            guard !data.isEmpty else {
+                log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR empty -> unsupported")
+                return false
+            }
+            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR ok (\(data.count) bytes) -> supported")
             return true
         } catch {
             log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR failed (\(error.localizedDescription, privacy: .public)) -> unsupported")
