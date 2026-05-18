@@ -1,16 +1,12 @@
 @preconcurrency import AVFoundation
 import CoreMedia
 
-/// AVFoundation-based camera controls.
+/// AVFoundation-based camera controls. Works with any AVCaptureDevice;
+/// device-specific controls (manual exposure, raw UVC properties) are
+/// handled separately by the IOKit/UVC path.
 ///
-/// Confirmed working on OBSBOT Meet SE (see CAMERA_CAPABILITIES.md):
-///   - Focus: continuous auto / locked
-///   - Exposure: continuous auto / locked
-///   - Format / resolution switching
-///   - Frame rate control
-///
-/// A capture session must be started before querying live values (ISO,
-/// exposure duration, lens position) — openSession() handles this.
+/// A capture session must be started before querying live values —
+/// openSession() handles this.
 @MainActor
 final class AVFoundationController {
 
@@ -25,13 +21,14 @@ final class AVFoundationController {
         self.device = device
     }
 
-    nonisolated static func findOBSBOT() -> AVCaptureDevice? {
-        let session = AVCaptureDevice.DiscoverySession(
+    /// Enumerate every external camera the system advertises plus the built-in
+    /// wide-angle one. The picker UI lets the user choose which to control.
+    nonisolated static func enumerateCameras() -> [AVCaptureDevice] {
+        AVCaptureDevice.DiscoverySession(
             deviceTypes: [.externalUnknown, .builtInWideAngleCamera],
             mediaType: .video,
             position: .unspecified
-        )
-        return session.devices.first { $0.localizedName.contains(OBSBOT.name) }
+        ).devices
     }
 
     // MARK: - Session lifecycle

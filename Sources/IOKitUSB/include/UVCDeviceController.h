@@ -29,18 +29,30 @@ typedef NS_ENUM(uint8_t, UVCGetRequest) {
 /// Returns nil (and sets error) if the device is not found or cannot be opened.
 - (nullable instancetype)initWithVendorID:(uint16_t)vendorID
                                 productID:(uint16_t)productID
-                                    error:(NSError **)error NS_DESIGNATED_INITIALIZER;
+                                    error:(NSError **)error;
+
+/// Find the USB device with the given IOKit location ID and open it at the device
+/// level. Used to pair with an AVCaptureDevice whose `uniqueID` carries the
+/// location ID — works for any UVC camera without hardcoding VID/PID.
+- (nullable instancetype)initWithLocationID:(uint32_t)locationID
+                                      error:(NSError **)error;
 
 - (instancetype)init NS_UNAVAILABLE;
 
 /// Tear down the IOUSBHostDevice user-client.  Called automatically in -dealloc.
 - (void)closeDevice;
 
+/// Fetch the full USB configuration descriptor (config + interface + class-specific
+/// descriptors) via a standard GET_DESCRIPTOR request on EP0. The returned bytes
+/// can be walked by a UVC topology parser to discover Camera Terminal / Processing
+/// Unit / VC interface IDs at runtime.
+- (nullable NSData *)getConfigurationDescriptorWithError:(NSError **)error;
+
 /// Send a UVC class-specific GET request (direction = device-to-host) on EP0.
 /// @param request   UVC request code (UVCRequestGetCurrent, UVCRequestGetMin, etc.)
-/// @param unitID    UVC unit/terminal ID (e.g. 3 = Processing Unit)
+/// @param unitID    UVC unit/terminal ID (discovered from the configuration descriptor)
 /// @param selector  Control selector (e.g. 0x01 = Brightness)
-/// @param intf      Video Control interface number (0 for OBSBOT)
+/// @param intf      Video Control interface number (discovered from the descriptor)
 /// @param length    Expected response length in bytes
 /// @param error     On failure, populated with the IOKit error
 /// @returns NSData containing the response bytes, or nil on failure
