@@ -1,5 +1,8 @@
 import Foundation
 import AVFoundation
+import os
+
+private let log = Logger(subsystem: "com.lensbar", category: "camera")
 
 /// Unified entry point combining AVFoundation (focus/exposure/format/fps)
 /// and the IOKit UVC path (brightness/contrast/saturation/etc.).
@@ -27,6 +30,7 @@ final class CameraController {
     func openSession() async throws {
         let locationID = Self.locationID(for: device)
         let deviceName = device.localizedName
+        log.info("openSession device=\(deviceName, privacy: .public) uniqueID=\(self.device.uniqueID, privacy: .public) parsedLocationID=\(locationID.map { String(format: "0x%08X", $0) } ?? "nil", privacy: .public)")
 
         async let avfOpen: Void = avf.openSession()
         async let uvcSetup: IOKitUVCController? = Self.connectUVC(
@@ -36,6 +40,7 @@ final class CameraController {
 
         try await avfOpen
         self.uvc = await uvcSetup
+        log.info("openSession finished device=\(deviceName, privacy: .public) uvc=\(self.uvc == nil ? "nil" : "available", privacy: .public)")
     }
 
     func closeSession() { avf.closeSession() }
@@ -44,26 +49,31 @@ final class CameraController {
         locationID: UInt32?,
         deviceName: String
     ) async -> IOKitUVCController? {
-        guard let locationID else { return nil }
+        guard let locationID else {
+            log.info("connectUVC skipped device=\(deviceName, privacy: .public) reason=no parseable location ID")
+            return nil
+        }
         return await Task.detached(priority: .userInitiated) {
             do {
                 let topology = try IOKitUVCController.readTopology(locationID: locationID)
+                log.info("connectUVC topology device=\(deviceName, privacy: .public) vcInterface=\(topology.vcInterface) cameraTerminal=\(topology.cameraTerminal.map { String($0) } ?? "nil", privacy: .public) processingUnit=\(topology.processingUnit.map { String($0) } ?? "nil", privacy: .public)")
                 return try IOKitUVCController(locationID: locationID, topology: topology)
             } catch {
-                fputs("Info: IOKit UVC unavailable for \(deviceName) " +
-                      "(\(error.localizedDescription)) — only AVFoundation controls available\n", stderr)
+                log.error("connectUVC failed device=\(deviceName, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                 return nil
             }
         }.value
     }
 
     /// Extract the IOKit USB location ID from an AVCaptureDevice's `uniqueID`.
-    /// On macOS, `uniqueID` for a USB camera typically looks like the 8-hex-digit
-    /// location ID concatenated with an additional vendor/serial suffix (e.g.
-    /// `"0x14200000046d082d"`). Take only the first 8 hex digits; the rest is
-    /// not part of the location ID and would overflow UInt32.
-    /// Returns nil for devices without a parseable location ID — virtual cameras,
-    /// Continuity Camera, the iOS simulator.
+    /// For USB cameras on macOS, `uniqueID` encodes
+    /// `0x[locationID(8 hex)][idVendor(4 hex)][idProduct(4 hex)]` — 16 hex digits
+    /// total — but Apple strips leading zeros from the full value, so the visible
+    /// string can be shorter when the location ID has high zero bytes (e.g. an
+    /// Opal C1 at locationID `0x00200000` appears as `0x20000003e7f63d`, not
+    /// `0x0020000003e7f63d`). The trailing 8 digits are always VID+PID; anything
+    /// before that is the location ID. Returns nil for devices without a
+    /// parseable location ID — virtual cameras, Continuity Camera, the iOS simulator.
     static func locationID(for device: AVCaptureDevice) -> UInt32? {
         locationID(fromUniqueID: device.uniqueID)
     }
@@ -71,8 +81,13 @@ final class CameraController {
     static func locationID(fromUniqueID uniqueID: String) -> UInt32? {
         var id = uniqueID
         if id.hasPrefix("0x") || id.hasPrefix("0X") { id.removeFirst(2) }
-        let hex = id.prefix(while: \.isHexDigit).prefix(8)
+        let hex = String(id.prefix(while: \.isHexDigit))
         guard !hex.isEmpty else { return nil }
-        return UInt32(hex, radix: 16)
+        // > 8 digits means we have a VID/PID suffix; drop those 8 trailing nibbles
+        // and what's left is the (possibly zero-padded) location ID. ≤ 8 means
+        // the suffix has been entirely stripped or was never present — treat the
+        // whole run as the location ID.
+        let locHex = hex.count > 8 ? String(hex.dropLast(8)) : hex
+        return UInt32(locHex, radix: 16)
     }
 }

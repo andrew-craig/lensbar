@@ -81,10 +81,22 @@ static const uint8_t kDescriptorTypeConfiguration = 0x02;
 
 - (nullable instancetype)initWithLocationID:(uint32_t)locationID
                                       error:(NSError **)outError {
-    // Match against any IOUSBHostDevice with the given locationID. We don't pass
-    // VID/PID — the location ID alone uniquely identifies the device on this host
-    // for as long as it's plugged into the same port.
-    CFMutableDictionaryRef matchingDict = IOServiceMatching("IOUSBHostDevice");
+    // Enumerate every IOUSBHostDevice and pick the one whose locationID property
+    // matches. The straightforward "IOServiceMatching + add locationID to the
+    // dict" path is unreliable here — depending on macOS version and whether
+    // the dict was built via IOUSBHostDevice's factory method, IOKit's matcher
+    // may consult only a nested IOPropertyMatch sub-dict and ignore top-level
+    // custom keys. Enumerate-and-filter avoids that fragility and is the same
+    // pattern libusbp uses on macOS.
+    CFMutableDictionaryRef matchingDict = [IOUSBHostDevice
+        createMatchingDictionaryWithVendorID:nil
+                                   productID:nil
+                                   bcdDevice:nil
+                                 deviceClass:nil
+                              deviceSubclass:nil
+                              deviceProtocol:nil
+                                       speed:nil
+                                productIDArray:nil];
     if (!matchingDict) {
         if (outError) {
             *outError = [NSError errorWithDomain:@"UVCDeviceController" code:1
@@ -93,12 +105,35 @@ static const uint8_t kDescriptorTypeConfiguration = 0x02;
         return nil;
     }
 
-    // IOKit USB property key for the device's location ID (depth-encoded port path).
-    // Stable for as long as the device is plugged into the same port.
-    CFDictionarySetValue(matchingDict, CFSTR("locationID"), (__bridge CFNumberRef)@(locationID));
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    kern_return_t kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator);
+    if (kr != KERN_SUCCESS || iterator == IO_OBJECT_NULL) {
+        if (outError) {
+            *outError = [NSError errorWithDomain:@"UVCDeviceController" code:2
+                userInfo:@{NSLocalizedDescriptionKey:
+                    [NSString stringWithFormat:@"IOServiceGetMatchingServices failed (kr=0x%X)", kr]}];
+        }
+        return nil;
+    }
 
-    io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, matchingDict);
-    if (service == IO_OBJECT_NULL) {
+    io_service_t match = IO_OBJECT_NULL;
+    io_service_t candidate;
+    while ((candidate = IOIteratorNext(iterator)) != IO_OBJECT_NULL) {
+        CFTypeRef locRef = IORegistryEntryCreateCFProperty(candidate, CFSTR("locationID"), kCFAllocatorDefault, 0);
+        if (locRef && CFGetTypeID(locRef) == CFNumberGetTypeID()) {
+            uint32_t loc = 0;
+            if (CFNumberGetValue((CFNumberRef)locRef, kCFNumberSInt32Type, &loc) && loc == locationID) {
+                CFRelease(locRef);
+                match = candidate;
+                break;
+            }
+        }
+        if (locRef) CFRelease(locRef);
+        IOObjectRelease(candidate);
+    }
+    IOObjectRelease(iterator);
+
+    if (match == IO_OBJECT_NULL) {
         if (outError) {
             *outError = [NSError errorWithDomain:@"UVCDeviceController" code:2
                 userInfo:@{NSLocalizedDescriptionKey:
@@ -107,7 +142,7 @@ static const uint8_t kDescriptorTypeConfiguration = 0x02;
         return nil;
     }
 
-    return [self initWithService:service error:outError];
+    return [self initWithService:match error:outError];
 }
 
 - (BOOL)isOpen { return _device != nil; }

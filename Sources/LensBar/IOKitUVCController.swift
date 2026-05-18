@@ -1,5 +1,8 @@
 import Foundation
 import IOKitUSB
+import os
+
+private let log = Logger(subsystem: "com.lensbar", category: "uvc")
 
 /// Controls UVC camera parameters through the IOUSBHostDevice node (not through
 /// any interface).  Because EP0 control transfers are at device level, this path
@@ -28,6 +31,9 @@ final class IOKitUVCController: @unchecked Sendable {
         self.topology = topology
         self.supportedPU = Self.probePU(controller: controller, topology: topology)
         self.supportedCT = Self.probeCT(controller: controller, topology: topology)
+        let puNames = self.supportedPU.map { $0.displayName }.sorted().joined(separator: ", ")
+        let ctNames = self.supportedCT.map { $0.displayName }.sorted().joined(separator: ", ")
+        log.info("probe summary supportedPU=[\(puNames, privacy: .public)] supportedCT=[\(ctNames, privacy: .public)]")
     }
 
     deinit { controller.closeDevice() }
@@ -127,19 +133,22 @@ final class IOKitUVCController: @unchecked Sendable {
     // MARK: - Capability probing
 
     /// GET_INFO returns a 1-byte bitmap; bit 0 = GET supported, bit 1 = SET supported.
-    /// We treat any non-zero response as "control exists" and gate UI accordingly.
-    /// Failures (including IOKit transfer errors for missing controls) mean unsupported.
+    /// UVC 1.5 mandates GET_INFO on every implemented control, but real-world
+    /// firmware is uneven — plenty of cameras stall or return zero for GET_INFO
+    /// even when GET_CUR works fine. So we treat a non-zero GET_INFO as
+    /// authoritative and, if that fails, fall back to a GET_CUR probe: if the
+    /// device returns any value for the control's selector, the control exists.
     private static func probePU(controller: UVCDeviceController, topology: UVCTopology) -> Set<PUControl> {
         guard let unitID = topology.processingUnit else { return [] }
         var supported: Set<PUControl> = []
         for ctrl in PUControl.allCases {
-            if let info = try? controller.getRequest(
-                UVCRequest.getInfo.rawValue,
+            if probeControl(
+                controller: controller,
                 unitID: unitID,
                 selector: ctrl.rawValue,
                 interface: topology.vcInterface,
-                length: 1
-            ), let first = info.first, first != 0 {
+                dataLength: ctrl.dataLength
+            ) {
                 supported.insert(ctrl)
             }
         }
@@ -150,17 +159,64 @@ final class IOKitUVCController: @unchecked Sendable {
         guard let unitID = topology.cameraTerminal else { return [] }
         var supported: Set<CTControl> = []
         for ctrl in CTControl.allCases {
-            if let info = try? controller.getRequest(
-                UVCRequest.getInfo.rawValue,
+            if probeControl(
+                controller: controller,
                 unitID: unitID,
                 selector: ctrl.rawValue,
                 interface: topology.vcInterface,
-                length: 1
-            ), let first = info.first, first != 0 {
+                dataLength: ctrl.dataLength
+            ) {
                 supported.insert(ctrl)
             }
         }
         return supported
+    }
+
+    private static func probeControl(
+        controller: UVCDeviceController,
+        unitID: UInt8,
+        selector: UInt8,
+        interface: UInt8,
+        dataLength: Int
+    ) -> Bool {
+        do {
+            let info = try controller.getRequest(
+                UVCRequest.getInfo.rawValue,
+                unitID: unitID,
+                selector: selector,
+                interface: interface,
+                length: 1
+            )
+            if let first = info.first, first != 0 {
+                log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO=0x\(String(format: "%02X", first), privacy: .public) -> supported")
+                return true
+            }
+            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO returned 0 — trying GET_CUR fallback")
+        } catch {
+            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO failed (\(error.localizedDescription, privacy: .public)) — trying GET_CUR fallback")
+        }
+        do {
+            let data = try controller.getRequest(
+                UVCRequest.getCurrent.rawValue,
+                unitID: unitID,
+                selector: selector,
+                interface: interface,
+                length: UInt16(dataLength)
+            )
+            // A truthful GET_CUR for a real control returns dataLength bytes. An
+            // empty response means the device acked the request but provided no
+            // value — treat that as "control isn't really there" so we don't
+            // surface a slider that can't read or write a value.
+            guard !data.isEmpty else {
+                log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR empty -> unsupported")
+                return false
+            }
+            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR ok (\(data.count) bytes) -> supported")
+            return true
+        } catch {
+            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR failed (\(error.localizedDescription, privacy: .public)) -> unsupported")
+            return false
+        }
     }
 
     // MARK: - Private helpers
