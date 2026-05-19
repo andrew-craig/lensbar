@@ -6,6 +6,7 @@ enum UVCError: Error, LocalizedError {
     case transferFailed(String)
     case invalidValue(String)
     case sessionFailed(String)
+    case deviceInUse
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,7 @@ enum UVCError: Error, LocalizedError {
         case .transferFailed(let m):   return "USB control transfer failed: \(m)"
         case .invalidValue(let m):     return "Invalid value: \(m)"
         case .sessionFailed(let m):    return "AVFoundation session error: \(m)"
+        case .deviceInUse:             return "Camera is in use by another application"
         }
     }
 }

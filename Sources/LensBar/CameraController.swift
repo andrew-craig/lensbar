@@ -24,18 +24,25 @@ final class CameraController {
     /// probe per-control support off the main thread. The probe is ~20 USB
     /// control transfers and can take 100–200ms; doing it off-main keeps the
     /// menu-bar UI from hitching during camera switch.
-    func openSession() async throws {
+    ///
+    /// `snapshot` is replayed before `startRunning()` on the AVF side, so the
+    /// camera comes up with the user's last-known format/FPS rather than the
+    /// firmware default. Returns whether the device was held by another app at
+    /// open time; when true, no settings (AVF or UVC) are restored so we don't
+    /// fight whatever app currently owns the camera.
+    func openSession(applying snapshot: DeviceSnapshot?) async throws -> Bool {
         let locationID = Self.locationID(for: device)
         let deviceName = device.localizedName
 
-        async let avfOpen: Void = avf.openSession()
+        async let avfOpen: Bool = avf.openSession(applying: snapshot)
         async let uvcSetup: IOKitUVCController? = Self.connectUVC(
             locationID: locationID,
             deviceName: deviceName
         )
 
-        try await avfOpen
+        let wasBusy = try await avfOpen
         self.uvc = await uvcSetup
+        return wasBusy
     }
 
     func closeSession() { avf.closeSession() }

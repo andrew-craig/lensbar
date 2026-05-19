@@ -33,7 +33,15 @@ final class AVFoundationController {
 
     // MARK: - Session lifecycle
 
-    func openSession() async throws {
+    /// Open a capture session, optionally pre-applying a persisted snapshot
+    /// before `startRunning()` so the camera comes up in its restored
+    /// configuration without a default→user transition.
+    ///
+    /// Returns `wasBusy` — true if another app held the device at probe time.
+    /// When busy, no writes are issued (neither AVF lock nor UVC) so we don't
+    /// fight whatever app currently owns the camera. The caller skips state
+    /// restoration in that case.
+    func openSession(applying snapshot: DeviceSnapshot?) async throws -> Bool {
         let sess = AVCaptureSession()
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -41,6 +49,20 @@ final class AVFoundationController {
         } catch {
             throw UVCError.sessionFailed(error.localizedDescription)
         }
+
+        let busy = isDeviceBusy()
+
+        // Apply persisted format/fps/modes between addInput and startRunning so
+        // the camera comes up already configured — no default→user transition
+        // visible in the preview. On macOS, explicit `activeFormat` writes
+        // inside `lockForConfiguration` are honored even with the default
+        // session preset, so no preset change is needed.
+        if !busy, let snapshot {
+            sess.beginConfiguration()
+            applySnapshotPreStart(snapshot, session: sess)
+            sess.commitConfiguration()
+        }
+
         let queue = sessionQueue
         await withCheckedContinuation { continuation in
             queue.async {
@@ -53,12 +75,79 @@ final class AVFoundationController {
             throw CancellationError()
         }
         self.session = sess
+        return busy
+    }
+
+    /// Apply AVF-side snapshot values to the device while the session is in
+    /// `beginConfiguration` and before `startRunning`. Each write is
+    /// best-effort: if a value isn't applicable (format gone, FPS not in any
+    /// range, mode not supported) we skip rather than throw, so partial
+    /// restoration still works.
+    private func applySnapshotPreStart(_ snapshot: DeviceSnapshot, session: AVCaptureSession) {
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            return
+        }
+        defer { device.unlockForConfiguration() }
+
+        if let w = snapshot.formatWidth,
+           let h = snapshot.formatHeight,
+           let pf = snapshot.formatPixelFormat,
+           let match = Self.matchFormat(in: device.formats, width: w, height: h, pixelFormat: pf) {
+            device.activeFormat = match
+        }
+
+        if let fps = snapshot.fps {
+            let ranges = device.activeFormat.videoSupportedFrameRateRanges
+            if let best = ranges.min(by: { abs($0.maxFrameRate - Double(fps)) < abs($1.maxFrameRate - Double(fps)) }),
+               abs(best.maxFrameRate - Double(fps)) <= 1.0 {
+                device.activeVideoMinFrameDuration = best.minFrameDuration
+                device.activeVideoMaxFrameDuration = best.minFrameDuration
+            }
+        }
+
+        if let focusAuto = snapshot.focusAuto {
+            let mode: AVCaptureDevice.FocusMode = focusAuto ? .continuousAutoFocus : .locked
+            if device.isFocusModeSupported(mode) {
+                device.focusMode = mode
+            }
+        }
+        if let exposureAuto = snapshot.exposureAuto {
+            let mode: AVCaptureDevice.ExposureMode = exposureAuto ? .continuousAutoExposure : .locked
+            if device.isExposureModeSupported(mode) {
+                device.exposureMode = mode
+            }
+        }
+    }
+
+    static func matchFormat(in formats: [AVCaptureDevice.Format],
+                            width: Int32,
+                            height: Int32,
+                            pixelFormat: UInt32) -> AVCaptureDevice.Format? {
+        formats.first { fmt in
+            let dims = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
+            let subtype = CMFormatDescriptionGetMediaSubType(fmt.formatDescription)
+            return dims.width == width && dims.height == height && subtype == pixelFormat
+        }
+    }
+
+    /// Identity of the device's current active format, in a form that survives
+    /// persistence and roundtrips through `matchFormat`.
+    func activeFormatIdentity() -> (width: Int32, height: Int32, pixelFormat: UInt32) {
+        let fmt = device.activeFormat
+        let dims = CMVideoFormatDescriptionGetDimensions(fmt.formatDescription)
+        let subtype = CMFormatDescriptionGetMediaSubType(fmt.formatDescription)
+        return (dims.width, dims.height, subtype)
     }
 
     /// Probes whether another app currently holds the camera.
     /// `lockForConfiguration` fails with `AVErrorDeviceInUseByAnotherApplication`
-    /// (-11817) when the device is in use elsewhere. Cheap and side-effect-free
-    /// when it succeeds (immediate unlock).
+    /// (-11815) when the device is in use elsewhere. Cheap and side-effect-free
+    /// when it succeeds (immediate unlock). Result is point-in-time only — the
+    /// device may become contended later (e.g. a vendor DAL plugin acquires the
+    /// lock after `startRunning`), so callers must still handle in-use errors
+    /// from subsequent `configure` calls.
     func isDeviceBusy() -> Bool {
         do {
             try device.lockForConfiguration()
@@ -193,6 +282,8 @@ final class AVFoundationController {
             try device.lockForConfiguration()
             block(device)
             device.unlockForConfiguration()
+        } catch let error as AVError where error.code == .deviceInUseByAnotherApplication {
+            throw UVCError.deviceInUse
         } catch {
             throw UVCError.sessionFailed("lockForConfiguration failed: \(error)")
         }
