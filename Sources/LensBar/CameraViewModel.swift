@@ -139,12 +139,6 @@ public final class CameraViewModel: ObservableObject {
                 loadUVCState()
                 isReady = true
                 UserDefaults.standard.set(device.uniqueID, forKey: Self.selectedDeviceDefaultsKey)
-                // First-launch case: persist the just-loaded defaults so the
-                // next launch is a true idempotent replay rather than another
-                // "fresh defaults" pass.
-                if snapshot == nil {
-                    saveSnapshot()
-                }
             } catch is CancellationError {
                 return
             } catch {
@@ -372,7 +366,11 @@ public final class CameraViewModel: ObservableObject {
     }
 
     func applyWBAuto() {
-        guard let uvc = controller?.uvc else { return }
+        // `loadUVCState` writes `wbAuto`, which fires Toggle's onChange — without
+        // this guard the load would round-trip a redundant USB write back to the
+        // camera. Slider commits don't need the same guard because they fire from
+        // `onEditingChanged`, not from programmatic value changes.
+        guard !isLoadingAVFState, let uvc = controller?.uvc else { return }
         report { try uvc.setPU(.whiteBalanceTempAuto, value: wbAuto ? 1 : 0) }
         saveSnapshot()
     }

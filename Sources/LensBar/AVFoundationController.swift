@@ -143,7 +143,7 @@ final class AVFoundationController {
 
     /// Probes whether another app currently holds the camera.
     /// `lockForConfiguration` fails with `AVErrorDeviceInUseByAnotherApplication`
-    /// (-11815) when the device is in use elsewhere. Cheap and side-effect-free
+    /// when the device is in use elsewhere. Cheap and side-effect-free
     /// when it succeeds (immediate unlock). Result is point-in-time only — the
     /// device may become contended later (e.g. a vendor DAL plugin acquires the
     /// lock after `startRunning`), so callers must still handle in-use errors
