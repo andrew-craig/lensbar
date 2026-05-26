@@ -52,11 +52,11 @@ final class AVFoundationController {
 
         let busy = isDeviceBusy()
 
-        // Apply persisted format/fps/modes between addInput and startRunning so
-        // the camera comes up already configured — no default→user transition
-        // visible in the preview. On macOS, explicit `activeFormat` writes
-        // inside `lockForConfiguration` are honored even with the default
-        // session preset, so no preset change is needed.
+        // Apply persisted format between addInput and startRunning so the
+        // camera comes up at the restored resolution — no visible default→user
+        // transition. On macOS, explicit `activeFormat` writes inside
+        // `lockForConfiguration` are honored even with the default session
+        // preset, so no preset change is needed.
         if !busy, let snapshot {
             sess.beginConfiguration()
             applySnapshotPreStart(snapshot, session: sess)
@@ -75,49 +75,53 @@ final class AVFoundationController {
             throw CancellationError()
         }
         self.session = sess
+
+        // Re-apply fps/focus/exposure now that the session is running. These
+        // need to go through `lockForConfiguration` on a *running* session to
+        // force AVF to renegotiate with the UVC camera; pre-start writes to
+        // `activeVideoMinFrameDuration` in particular update the property but
+        // don't survive the VS_PROBE/VS_COMMIT negotiation at startRunning, so
+        // the camera ends up streaming at the format's default frame rate even
+        // though the device reports the saved value back.
+        if !busy, let snapshot {
+            applySnapshotPostStart(snapshot)
+        }
         return busy
     }
 
-    /// Apply AVF-side snapshot values to the device while the session is in
-    /// `beginConfiguration` and before `startRunning`. Each write is
-    /// best-effort: if a value isn't applicable (format gone, FPS not in any
-    /// range, mode not supported) we skip rather than throw, so partial
-    /// restoration still works.
+    /// Restore the saved format on the device before `startRunning` so the
+    /// preview comes up at the right resolution without a default→user flip.
+    /// FPS and focus/exposure modes are deliberately deferred to
+    /// `applySnapshotPostStart` — pre-start writes to those don't survive
+    /// AVF's UVC negotiation at `startRunning`.
     private func applySnapshotPreStart(_ snapshot: DeviceSnapshot, session: AVCaptureSession) {
+        guard let w = snapshot.formatWidth,
+              let h = snapshot.formatHeight,
+              let pf = snapshot.formatPixelFormat,
+              let match = Self.matchFormat(in: device.formats, width: w, height: h, pixelFormat: pf) else {
+            return
+        }
         do {
             try device.lockForConfiguration()
         } catch {
             return
         }
         defer { device.unlockForConfiguration() }
+        device.activeFormat = match
+    }
 
-        if let w = snapshot.formatWidth,
-           let h = snapshot.formatHeight,
-           let pf = snapshot.formatPixelFormat,
-           let match = Self.matchFormat(in: device.formats, width: w, height: h, pixelFormat: pf) {
-            device.activeFormat = match
-        }
-
+    /// Re-apply snapshot values that require a running session. Each write is
+    /// best-effort: an unsupported mode or out-of-range fps is skipped rather
+    /// than thrown, so partial restoration still works.
+    private func applySnapshotPostStart(_ snapshot: DeviceSnapshot) {
         if let fps = snapshot.fps {
-            let ranges = device.activeFormat.videoSupportedFrameRateRanges
-            if let best = ranges.min(by: { abs($0.maxFrameRate - Double(fps)) < abs($1.maxFrameRate - Double(fps)) }),
-               abs(best.maxFrameRate - Double(fps)) <= 1.0 {
-                device.activeVideoMinFrameDuration = best.minFrameDuration
-                device.activeVideoMaxFrameDuration = best.minFrameDuration
-            }
+            try? setFPS(Double(fps))
         }
-
         if let focusAuto = snapshot.focusAuto {
-            let mode: AVCaptureDevice.FocusMode = focusAuto ? .continuousAutoFocus : .locked
-            if device.isFocusModeSupported(mode) {
-                device.focusMode = mode
-            }
+            try? focusAuto ? setFocusAuto() : setFocusLocked()
         }
         if let exposureAuto = snapshot.exposureAuto {
-            let mode: AVCaptureDevice.ExposureMode = exposureAuto ? .continuousAutoExposure : .locked
-            if device.isExposureModeSupported(mode) {
-                device.exposureMode = mode
-            }
+            try? exposureAuto ? setExposureAuto() : setExposureLocked()
         }
     }
 
