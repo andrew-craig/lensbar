@@ -110,18 +110,38 @@ final class AVFoundationController {
         device.activeFormat = match
     }
 
-    /// Re-apply snapshot values that require a running session. Each write is
-    /// best-effort: an unsupported mode or out-of-range fps is skipped rather
-    /// than thrown, so partial restoration still works.
+    /// Re-apply snapshot values that require a running session. Batched under
+    /// a single `lockForConfiguration` so AVF renegotiates with the camera
+    /// once for all three writes rather than three times. Each individual
+    /// write is best-effort: out-of-range fps or unsupported modes are
+    /// skipped rather than thrown, so partial restoration still works.
     private func applySnapshotPostStart(_ snapshot: DeviceSnapshot) {
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            return
+        }
+        defer { device.unlockForConfiguration() }
+
         if let fps = snapshot.fps {
-            try? setFPS(Double(fps))
+            let ranges = device.activeFormat.videoSupportedFrameRateRanges
+            if let best = ranges.min(by: { abs($0.maxFrameRate - Double(fps)) < abs($1.maxFrameRate - Double(fps)) }),
+               abs(best.maxFrameRate - Double(fps)) <= 1.0 {
+                device.activeVideoMinFrameDuration = best.minFrameDuration
+                device.activeVideoMaxFrameDuration = best.minFrameDuration
+            }
         }
         if let focusAuto = snapshot.focusAuto {
-            try? focusAuto ? setFocusAuto() : setFocusLocked()
+            let mode: AVCaptureDevice.FocusMode = focusAuto ? .continuousAutoFocus : .locked
+            if device.isFocusModeSupported(mode) {
+                device.focusMode = mode
+            }
         }
         if let exposureAuto = snapshot.exposureAuto {
-            try? exposureAuto ? setExposureAuto() : setExposureLocked()
+            let mode: AVCaptureDevice.ExposureMode = exposureAuto ? .continuousAutoExposure : .locked
+            if device.isExposureModeSupported(mode) {
+                device.exposureMode = mode
+            }
         }
     }
 
