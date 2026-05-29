@@ -12,7 +12,7 @@ struct LensBarApp: App {
             ContentView()
                 .environmentObject(camera)
         } label: {
-            Image("Lensbar")
+            Image("MenuBarIcon")
         }
         .menuBarExtraStyle(.window)
     }
