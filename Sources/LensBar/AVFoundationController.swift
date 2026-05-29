@@ -83,6 +83,14 @@ final class AVFoundationController {
         // don't survive the VS_PROBE/VS_COMMIT negotiation at startRunning, so
         // the camera ends up streaming at the format's default frame rate even
         // though the device reports the saved value back.
+        //
+        // NOTE: the fps write here is still clobbered shortly after, when
+        // SwiftUI attaches the preview layer to the running session — that
+        // synchronously resets the frame duration to the format default.
+        // CameraViewModel re-asserts the rate post-attach via
+        // reapplyFrameRate() (CameraPreview.onAttach). This write keeps the
+        // displayed value and focus/exposure correct; that one fixes the
+        // real stream.
         if !busy, let snapshot {
             applySnapshotPostStart(snapshot)
         }

@@ -68,7 +68,7 @@ public struct ContentView: View {
 
     private var preview: some View {
         ZStack {
-            CameraPreview(session: camera.session)
+            CameraPreview(session: camera.session, onAttach: { camera.reapplyFrameRate() })
             if camera.cameraInUse {
                 Color.black
                 Text("Camera is in use by another app")
