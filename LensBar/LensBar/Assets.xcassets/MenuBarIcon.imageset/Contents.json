@@ -1,0 +1,42 @@
+{
+  "images" : [
+    {
+      "filename" : "Lensbar_18.png",
+      "idiom" : "universal",
+      "scale" : "1x",
+      "appearances" : []
+    },
+    {
+      "filename" : "Lensbar_36.png",
+      "idiom" : "universal",
+      "scale" : "2x",
+      "appearances" : []
+    },
+    {
+      "filename" : "Lensbar_18_dark.png",
+      "idiom" : "universal",
+      "scale" : "1x",
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    },
+    {
+      "filename" : "Lensbar_36_dark.png",
+      "idiom" : "universal",
+      "scale" : "2x",
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
