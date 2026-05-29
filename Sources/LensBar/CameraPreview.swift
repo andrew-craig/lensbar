@@ -8,7 +8,7 @@ struct CameraPreview: NSViewRepresentable {
     /// Attaching the layer resets the device's frame duration, so the view
     /// model uses this to re-assert the user's frame rate. See
     /// `PreviewNSView.session`.
-    var onAttach: () -> Void = {}
+    var onAttach: @MainActor @Sendable () -> Void = {}
 
     func makeNSView(context: Context) -> PreviewNSView {
         let view = PreviewNSView()
@@ -25,7 +25,7 @@ struct CameraPreview: NSViewRepresentable {
 
 final class PreviewNSView: NSView {
     private let previewLayer = AVCaptureVideoPreviewLayer()
-    var onAttach: () -> Void = {}
+    var onAttach: @MainActor @Sendable () -> Void = {}
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -52,7 +52,7 @@ final class PreviewNSView: NSView {
             // The reset is synchronous with the assignment above; re-assert on
             // the next main-loop tick so we run after AVFoundation settles and
             // outside SwiftUI's view-update pass.
-            DispatchQueue.main.async { [onAttach] in onAttach() }
+            DispatchQueue.main.async { [weak self] in self?.onAttach() }
         }
     }
 }
