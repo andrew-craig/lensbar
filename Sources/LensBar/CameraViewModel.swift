@@ -316,6 +316,18 @@ public final class CameraViewModel: ObservableObject {
         catch { errorMessage = error.localizedDescription }
     }
 
+    /// Re-assert the current frame rate on the live device. Attaching an
+    /// `AVCaptureVideoPreviewLayer` to a running session synchronously resets
+    /// the device's frame duration to the active format's default, silently
+    /// undoing the FPS restored at launch (the displayed value stays correct
+    /// because it was read before the preview attached, so only the real stream
+    /// drifts). `CameraPreview` calls this the moment it attaches the session.
+    /// Idempotent and safe to call repeatedly.
+    func reapplyFrameRate() {
+        guard !cameraInUse, let cam = controller else { return }
+        try? cam.avf.setFPS(Double(fps))
+    }
+
     func applyFocusMode() {
         guard !isLoadingAVFState, let cam = controller else { return }
         do {

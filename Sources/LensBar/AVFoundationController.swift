@@ -75,6 +75,21 @@ final class AVFoundationController {
             throw CancellationError()
         }
         self.session = sess
+
+        // Re-apply the persisted FPS now that the stream is live. A min/max
+        // frame duration written pre-start (in applySnapshotPreStart) updates
+        // the AVCaptureDevice property but is discarded by startRunning(), which
+        // negotiates the UVC stream at the active format's default rate. Writing
+        // it again here renegotiates the live stream and, just as importantly,
+        // makes currentFPS report the restored value so the UI picker comes up
+        // correct. NOTE: this still gets clobbered shortly after, when SwiftUI
+        // attaches the preview layer to the running session (that synchronously
+        // resets frame duration to the format default) — CameraViewModel
+        // re-asserts it post-attach via reapplyFrameRate(). Both writes are
+        // needed: this one for the displayed value, that one for the real stream.
+        if !busy, let fps = snapshot?.fps {
+            try? setFPS(Double(fps))
+        }
         return busy
     }
 
