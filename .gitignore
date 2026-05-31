@@ -7,4 +7,4 @@ DerivedData/
 .claude/worktrees
 .claude/settings.local.json
 build/
-.DS_STORE
+.DS_Store
