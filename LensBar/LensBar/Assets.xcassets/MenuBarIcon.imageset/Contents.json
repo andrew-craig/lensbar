@@ -3,36 +3,48 @@
     {
       "filename" : "Lensbar_18.png",
       "idiom" : "universal",
-      "scale" : "1x",
-      "appearances" : []
+      "scale" : "1x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "Lensbar_18_dark.png",
+      "idiom" : "universal",
+      "scale" : "1x"
     },
     {
       "filename" : "Lensbar_36.png",
       "idiom" : "universal",
-      "scale" : "2x",
-      "appearances" : []
+      "scale" : "2x"
     },
     {
-      "filename" : "Lensbar_18_dark.png",
-      "idiom" : "universal",
-      "scale" : "1x",
       "appearances" : [
         {
           "appearance" : "luminosity",
           "value" : "dark"
         }
-      ]
-    },
-    {
+      ],
       "filename" : "Lensbar_36_dark.png",
       "idiom" : "universal",
-      "scale" : "2x",
+      "scale" : "2x"
+    },
+    {
+      "idiom" : "universal",
+      "scale" : "3x"
+    },
+    {
       "appearances" : [
         {
           "appearance" : "luminosity",
           "value" : "dark"
         }
-      ]
+      ],
+      "idiom" : "universal",
+      "scale" : "3x"
     }
   ],
   "info" : {
