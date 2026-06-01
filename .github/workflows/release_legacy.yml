@@ -1,12 +1,12 @@
-name: Release
+name: Release (Legacy)
 
 on:
   push:
-    tags: ["v*"]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag for the release (e.g. v0.1.0)"
+        description: 'Tag for the release (e.g. v0.1.0)'
         required: true
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
 
@@ -48,8 +48,9 @@ jobs:
         run: |
           xcodebuild -project LensBar/LensBar.xcodeproj \
             -scheme LensBar -configuration Release \
-            -destination "platform=macOS,arch=arm64" \
+            -destination "platform=macOS" \
             -archivePath build/LensBar.xcarchive archive \
+            ARCHS="arm64 x86_64" \
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGN_IDENTITY="${{ secrets.DEVELOPER_ID_IDENTITY }}" \
@@ -83,16 +84,16 @@ jobs:
           ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
           hdiutil create -volname LensBar -srcfolder build/export/LensBar.app \
-            -ov -format UDZO LensBar.dmg
+            -ov -format UDZO LensBar-universal.dmg
           codesign --sign "${{ secrets.DEVELOPER_ID_IDENTITY }}" \
-            --timestamp LensBar.dmg
-          xcrun notarytool submit LensBar.dmg \
+            --timestamp LensBar-universal.dmg
+          xcrun notarytool submit LensBar-universal.dmg \
             --key key.p8 --key-id "$KEY_ID" --issuer "$ISSUER_ID" \
             --wait
-          xcrun stapler staple LensBar.dmg
+          xcrun stapler staple LensBar-universal.dmg
           rm key.p8
 
       - uses: softprops/action-gh-release@v3
         with:
-          files: LensBar.dmg
+          files: LensBar-universal.dmg
           tag_name: ${{ steps.version.outputs.tag }}
