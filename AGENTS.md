@@ -27,6 +27,10 @@ xcodebuild -project LensBar/LensBar.xcodeproj -scheme LensBar -configuration Rel
 
 `swift run` is not used — the `.app` bundle, entitlements, codesigning, and `MenuBarExtra` accessory activation all require the Xcode build path.
 
+## Release Pipeline
+
+Pushing a `v*` tag (or a manual `workflow_dispatch` with a `tag` input) runs `.github/workflows/release.yml`, which builds two signed, notarized, stapled DMGs in parallel — `LensBar.dmg` (arm64-only, `macos-26`) and `LensBar-universal.dmg` (arm64+x86_64, `macos-14`, needed because the universal slice can't be built on the newer runner) — attaches both to a GitHub Release, then renders `Casks/lensbar.rb.tmpl` (substituting version + both DMG checksums) and pushes the result as `Casks/lensbar.rb` to the `andrew-craig/homebrew-tap` repo via a `HOMEBREW_TAP_TOKEN` PAT secret. The published cask uses `on_arm`/`on_intel` to pick the right DMG per architecture. Users install with `brew install andrew-craig/tap/lensbar`.
+
 ## Layout
 
 - `Package.swift` — two targets: `IOKitUSB` (ObjC, links `IOUSBHost` + `IOKit`) and `LensBarCore` (Swift library with the headless camera control + SwiftUI views). No `@main` lives in the package.

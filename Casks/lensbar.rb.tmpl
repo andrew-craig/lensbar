@@ -1,0 +1,25 @@
+cask "lensbar" do
+  version "__VERSION__"
+
+  on_arm do
+    url "https://github.com/andrew-craig/lensbar/releases/download/v#{version}/LensBar.dmg"
+    sha256 "__ARM_SHA256__"
+  end
+
+  on_intel do
+    url "https://github.com/andrew-craig/lensbar/releases/download/v#{version}/LensBar-universal.dmg"
+    sha256 "__INTEL_SHA256__"
+  end
+
+  name "LensBar"
+  desc "Menu-bar app for controlling UVC webcams"
+  homepage "https://github.com/andrew-craig/lensbar"
+
+  depends_on macos: ">= :sonoma"
+
+  app "LensBar.app"
+
+  zap trash: [
+    "~/Library/Preferences/com.andrewcraig.LensBar.plist",
+  ]
+end
