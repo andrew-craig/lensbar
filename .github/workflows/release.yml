@@ -112,7 +112,7 @@ jobs:
 
   build-universal:
     needs: resolve-version
-    runs-on: macos-14
+    runs-on: macos-26
     outputs:
       sha256: ${{ steps.sha.outputs.sha256 }}
     steps:
@@ -140,7 +140,7 @@ jobs:
         run: |
           xcodebuild -project LensBar/LensBar.xcodeproj \
             -scheme LensBar -configuration Release \
-            -destination "platform=macOS" \
+            -destination "generic/platform=macOS" \
             -archivePath build/LensBar.xcarchive archive \
             ARCHS="arm64 x86_64" \
             MARKETING_VERSION="${{ needs.resolve-version.outputs.version }}" \

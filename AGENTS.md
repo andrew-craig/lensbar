@@ -29,7 +29,9 @@ xcodebuild -project LensBar/LensBar.xcodeproj -scheme LensBar -configuration Rel
 
 ## Release Pipeline
 
-Pushing a `v*` tag (or a manual `workflow_dispatch` with a `tag` input) runs `.github/workflows/release.yml`, which builds two signed, notarized, stapled DMGs in parallel — `LensBar.dmg` (arm64-only, `macos-26`) and `LensBar-universal.dmg` (arm64+x86_64, `macos-14`, needed because the universal slice can't be built on the newer runner) — attaches both to a GitHub Release, then renders `Casks/lensbar.rb.tmpl` (substituting version + both DMG checksums) and pushes the result as `Casks/lensbar.rb` to the `andrew-craig/homebrew-tap` repo via a `HOMEBREW_TAP_TOKEN` PAT secret. The published cask uses `on_arm`/`on_intel` to pick the right DMG per architecture. Users install with `brew install andrew-craig/tap/lensbar`.
+Pushing a `v*` tag (or a manual `workflow_dispatch` with a `tag` input) runs `.github/workflows/release.yml`, which builds two signed, notarized, stapled DMGs in parallel, both on `macos-26` — `LensBar.dmg` (arm64-only, `-destination "platform=macOS,arch=arm64"`) and `LensBar-universal.dmg` (arm64+x86_64, `ARCHS="arm64 x86_64"` with `-destination "generic/platform=macOS"`; no Intel-hosted runner is needed since the macOS SDK cross-targets x86_64 from Apple Silicon) — attaches both to a GitHub Release, then renders `Casks/lensbar.rb.tmpl` (substituting version + both DMG checksums) and pushes the result as `Casks/lensbar.rb` to the `andrew-craig/homebrew-tap` repo via a `HOMEBREW_TAP_TOKEN` PAT secret. The published cask uses `on_arm`/`on_intel` to pick the right DMG per architecture. Users install with `brew install andrew-craig/tap/lensbar`.
+
+Both build jobs must run on the same runner image (currently `macos-26`) so the `.xcodeproj`'s pbxproj format stays openable — an older image pinned to a stale default Xcode (e.g. `macos-14`'s Xcode 15.4) will fail with "future Xcode project file format" once the project is saved by a newer Xcode.
 
 ## Layout
 
