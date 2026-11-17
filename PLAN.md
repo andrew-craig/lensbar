@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 and 2 done (2026-11-17). Phases 3 to 5 not started.
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 3 done in code (2026-11-17; Phase 3 not yet exercised at runtime, see its results). Phases 4 and 5 not started.
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 
@@ -320,6 +320,44 @@ This phase is useful on its own and carries no signing risk.
   (custom property), which applies it by replacing the device only when its
   client count is 0, either straight away or deferred until the count reaches 0.
 - Handle camera unplug / replug and app relaunch while a client is streaming.
+
+#### Phase 3 results (2026-11-17)
+
+- `CMIOHardware` wraps the C API (device by UID, sink stream by direction,
+  string properties, listener blocks). `VirtualCameraEndpoint` is the
+  (device object, sink stream) pair the app feeds; it's compared, not cached,
+  because both IDs change on extension restart and device replacement.
+- `VirtualCameraSink` attaches/detaches on its own serial queue
+  (`CMIOStreamCopyBufferQueue` + `CMIODeviceStartStream`; teardown stops the
+  stream and releases the queue). `enqueue` runs on the capture queue,
+  re-stamps on the host clock with `CMSampleBufferCreateCopyWithNewTiming`
+  (shares the pixel buffer) and drops when the queue is full, releasing the
+  retain if `CMSimpleQueueEnqueue` fails (the spike leaked it).
+- `VirtualCameraMonitor` listens to the system device list and, per device
+  object, to `lbcc` and the stream list; a 5 s poll is the safety net. It
+  writes `lbfm` whenever the desired format or the device object changes.
+- `VirtualCameraDemandGate` (pure, tested) adds `.virtualCamera` at count > 0
+  and removes it after a **5 s grace** at 0, so Zoom's video toggles don't
+  restart the camera. The extension's 2 s settle is shorter, so a deferred
+  device replacement happens while the app is still feeding, and the sink
+  follows the new endpoint. The device vanishing counts as 0 clients.
+- `VirtualCameraCoordinator` joins these: the sink is attached exactly while a
+  capture session is open and the device exists. `CameraViewModel` pushes the
+  format (active resolution, NV12, `activeVideoMinFrameDuration` rate) after
+  every open and every `applyFormat` / `applyFPS`.
+- The app delegate now owns `CameraViewModel` and calls
+  `startVirtualCamera()` at launch, so a client already streaming when
+  LensBar (re)launches gets video without the popover opening.
+- Unplug / replug: `wasDisconnectedNotification` for the camera in use closes
+  the session without saving the snapshot; `wasConnectedNotification` reopens
+  it if any demand is still active. A capture-session runtime error on a
+  still-connected camera closes and reopens once after 2 s. The extension's
+  placeholder covers the gaps.
+- Verified: `swift test` (97 tests), Debug app build, app launches cleanly
+  with the extension absent. **Not verified at runtime:** sink feed, client
+  count, format push, unplug/replug and relaunch against the real extension.
+  That needs the Phase 4 installer (activation from `/Applications`); check
+  it then, before the Phase 6 matrix.
 
 ### Phase 4: install flow and UI
 

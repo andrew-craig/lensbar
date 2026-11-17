@@ -35,6 +35,7 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreMediaIO"),
             ]
         ),
         .testTarget(
