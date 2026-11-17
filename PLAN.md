@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 not started.
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phase 1 done (2026-11-17). Phases 2 to 5 not started.
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 

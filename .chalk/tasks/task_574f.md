@@ -5,11 +5,11 @@ type: task
 status: open
 priority: 1
 labels: [virtual-camera,phase-3]
-blocked_by: [task_b0f2,task_a6ae]
+blocked_by: [task_a6ae]
 parent: epic_7e74
 remote_task_url: null
 created_at: 2026-11-17T00:06:38Z
-updated_at: 2026-11-17T00:06:38Z
+updated_at: 2026-11-17T01:48:14Z
 ---
 PLAN.md §6 Phase 3. Client count > 0 adds the virtualCamera demand; 0 removes it after a short grace period so quick re-triggers don't restart the camera. Uses notifications or polling per spike result.
 

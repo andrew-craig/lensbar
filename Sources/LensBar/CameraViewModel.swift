@@ -34,6 +34,11 @@ public final class CameraViewModel: ObservableObject {
     @Published var focusAutoSupported: Bool = false
     @Published var exposureAutoSupported: Bool = false
 
+    /// Frame rate measured from real frame timestamps (`RateMonitor`), or nil
+    /// when the session isn't delivering frames. Display only — a mismatch with
+    /// `fps` means something reset the device; LensBar doesn't correct it.
+    @Published var actualFPS: Double?
+
     // IOKit UVC — Processing Unit
     @Published var puRanges: [PUControl: ClosedRange<Double>] = [:]
     @Published var puValues: [PUControl: Double] = [:]
@@ -57,6 +62,14 @@ public final class CameraViewModel: ObservableObject {
 
     private var controller: CameraController?
     private var startTask: Task<Void, Never>?
+    private var rateTask: Task<Void, Never>?
+
+    /// Session lifetime policy: the camera runs while any demand source is
+    /// active (popover open, virtual-camera clients), not just the popover.
+    private lazy var pipeline = CapturePipeline(
+        start: { [weak self] in self?.openCamera() },
+        stop: { [weak self] in self?.closeCamera() }
+    )
 
     // Suppresses `apply*` work while `loadAVFState` is populating @Published
     // values. SwiftUI `onChange` handlers fire asynchronously after the values
@@ -64,7 +77,20 @@ public final class CameraViewModel: ObservableObject {
     // `lockForConfiguration` calls for state we just read from the device.
     private var isLoadingAVFState = false
 
-    func start() {
+    // MARK: - Demand
+
+    /// Register a reason for the capture session to run. The session opens on
+    /// the first active demand.
+    func addDemand(_ source: CaptureDemand) {
+        pipeline.add(source)
+    }
+
+    /// Withdraw a demand. The session closes once no demand is left.
+    func removeDemand(_ source: CaptureDemand) {
+        pipeline.remove(source)
+    }
+
+    private func openCamera() {
         guard controller == nil, startTask == nil else { return }
         refreshDeviceList()
         guard let device = chooseDevice() else {
@@ -75,7 +101,7 @@ public final class CameraViewModel: ObservableObject {
         launch(device: device)
     }
 
-    func stop() {
+    private func closeCamera() {
         // Flush any state changes before tearing down. `saveSnapshot` is a
         // no-op while `cameraInUse` is true so we never overwrite the saved
         // values with state we never applied.
@@ -87,13 +113,14 @@ public final class CameraViewModel: ObservableObject {
         session = nil
         isReady = false
         cameraInUse = false
+        stopRateUpdates()
     }
 
     /// Switch to the camera with the given uniqueID. Tears down any in-flight
     /// or open session and re-runs the setup pipeline for the new device.
     func selectDevice(id: String) {
         guard id != selectedDeviceID else { return }
-        stop()
+        closeCamera()
         UserDefaults.standard.set(id, forKey: Self.selectedDeviceDefaultsKey)
         selectedDeviceID = id
         resetPublishedState()
@@ -110,13 +137,17 @@ public final class CameraViewModel: ObservableObject {
             do {
                 let cam = CameraController(device: device)
                 let snapshot = DeviceSnapshot.load(forDeviceID: device.uniqueID)
-                let wasBusy = try await cam.openSession(applying: snapshot)
+                let wasBusy = try await cam.openSession(
+                    applying: snapshot,
+                    frameOutput: pipeline.frameTap.makeOutput()
+                )
                 if Task.isCancelled {
                     cam.closeSession()
                     return
                 }
                 controller = cam
                 session = cam.avf.session
+                startRateUpdates()
                 if wasBusy {
                     cameraInUse = true
                     // Skip AVF state load — populating @Published values would
@@ -293,6 +324,7 @@ public final class CameraViewModel: ObservableObject {
         guard !isLoadingAVFState, let cam = controller, formats.indices.contains(index) else { return }
         do {
             try cam.avf.setFormat(index: index)
+            pipeline.rateMonitor.reset()
             supportedFPS = formats[index].fps
             let live = Int(cam.avf.currentFPS.rounded())
             fps = supportedFPS.contains(live) ? live : (supportedFPS.first ?? 30)
@@ -311,6 +343,7 @@ public final class CameraViewModel: ObservableObject {
         guard !isLoadingAVFState, let cam = controller else { return }
         do {
             try cam.avf.setFPS(Double(rate))
+            pipeline.rateMonitor.reset()
             saveSnapshot()
         } catch UVCError.deviceInUse { markCameraInUse() }
         catch { errorMessage = error.localizedDescription }
@@ -326,6 +359,30 @@ public final class CameraViewModel: ObservableObject {
     func reapplyFrameRate() {
         guard !cameraInUse, let cam = controller else { return }
         try? cam.avf.setFPS(Double(fps))
+    }
+
+    // MARK: - Measured frame rate
+
+    /// Poll the rate monitor twice a second while a session is open. Frames
+    /// are recorded on the capture queue; publishing at a fixed cadence keeps
+    /// SwiftUI updates off the per-frame path.
+    private func startRateUpdates() {
+        rateTask?.cancel()
+        pipeline.rateMonitor.reset()
+        let monitor = pipeline.rateMonitor
+        rateTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let measured = monitor.framesPerSecond().map { ($0 * 10).rounded() / 10 }
+                if let self, self.actualFPS != measured { self.actualFPS = measured }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func stopRateUpdates() {
+        rateTask?.cancel()
+        rateTask = nil
+        actualFPS = nil
     }
 
     func applyFocusMode() {

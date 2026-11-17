@@ -39,8 +39,8 @@ public struct ContentView: View {
             .frame(width: 400, alignment: .leading)
         }
         .frame(width: 400, height: 560)
-        .onAppear { camera.start() }
-        .onDisappear { camera.stop() }
+        .onAppear { camera.addDemand(.popover) }
+        .onDisappear { camera.removeDemand(.popover) }
     }
 
     // MARK: - Device picker
@@ -101,6 +101,8 @@ public struct ContentView: View {
                 }
                 .pickerStyle(.menu)
                 .onChange(of: camera.fps) { new in camera.applyFPS(new) }
+
+                actualFPSLabel
             }
 
             HStack(spacing: 8) {
@@ -150,6 +152,23 @@ public struct ContentView: View {
                         .monospacedDigit()
                 }
             }
+        }
+    }
+
+    /// Measured stream rate. Orange when it's more than 1 fps away from the
+    /// selected rate, i.e. something reset the camera. Report only.
+    @ViewBuilder
+    private var actualFPSLabel: some View {
+        if let actual = camera.actualFPS {
+            let drifted = abs(actual - Double(camera.fps)) > 1.0
+            Text(String(format: "%.1f fps actual", actual))
+                .font(.caption)
+                .foregroundStyle(drifted ? Color.orange : Color.secondary)
+                .monospacedDigit()
+                .fixedSize()
+                .help(drifted
+                      ? "The camera is not running at the selected rate. Another app may have reconfigured it."
+                      : "Frame rate measured from the camera's frame timestamps.")
         }
     }
 
