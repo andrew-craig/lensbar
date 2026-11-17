@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import CoreMedia
+import VirtualCameraKit
 
 /// AVFoundation-based camera controls. Works with any AVCaptureDevice;
 /// device-specific controls (manual exposure, raw UVC properties) are

@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "LensBarCore", targets: ["LensBarCore"]),
+        // Shared by the app and the sandboxed LensBarCamera system extension.
+        .library(name: "VirtualCameraKit", targets: ["VirtualCameraKit"]),
     ],
     targets: [
         // Thin ObjC wrapper around IOUSBHost.framework for UVC control transfers.
@@ -19,9 +21,16 @@ let package = Package(
                 .linkedFramework("IOKit"),
             ]
         ),
+        // Virtual-camera constants and pure logic: device/stream UIDs, custom
+        // property names, format codec, format-update policy, rate estimator.
+        // Foundation only, no IOKit, so the sandboxed extension can link it.
+        .target(
+            name: "VirtualCameraKit",
+            path: "Sources/VirtualCameraKit"
+        ),
         .target(
             name: "LensBarCore",
-            dependencies: ["IOKitUSB"],
+            dependencies: ["IOKitUSB", "VirtualCameraKit"],
             path: "Sources/LensBar",
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
@@ -32,6 +41,11 @@ let package = Package(
             name: "LensBarTests",
             dependencies: ["LensBarCore"],
             path: "Tests/LensBarTests"
+        ),
+        .testTarget(
+            name: "VirtualCameraKitTests",
+            dependencies: ["VirtualCameraKit"],
+            path: "Tests/VirtualCameraKitTests"
         ),
     ]
 )

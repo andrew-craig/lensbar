@@ -1,5 +1,5 @@
 import Testing
-@testable import LensBarCore
+import VirtualCameraKit
 
 @Suite("FrameRateEstimator")
 struct FrameRateEstimatorTests {

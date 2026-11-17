@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import LensBarCore
+import VirtualCameraKit
 
 @Suite("Own virtual camera filtering")
 struct VirtualCameraIdentityTests {

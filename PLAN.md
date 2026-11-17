@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phase 1 done (2026-11-17). Phases 2 to 5 not started.
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 and 2 done (2026-11-17). Phases 3 to 5 not started.
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 
@@ -274,6 +274,38 @@ This phase is useful on its own and carries no signing risk.
 - Entitlements: extension gets app sandbox + app group; app gets
   `system-extension.install` (and stays unsandboxed).
 - Make sure the universal build (`ARCHS="arm64 x86_64"`) covers the extension.
+
+#### Phase 2 results (2026-11-17)
+
+- `VirtualCameraKit` holds `VirtualCameraIdentity` (device UID, initial stream
+  UIDs, extension bundle ID), `VirtualCameraProperty` (`lbcc` client count,
+  `lbfm` format, with their CMIO selectors and extension property names),
+  `VirtualCameraFormat` (string codec `"1280x720@25/1 420v"`, NTSC rates as
+  `n*1000/1001`, range checks), `AdvertisedFormatState` (the §4.5 policy as a
+  pure state machine), `FormatStore` and `FrameRateEstimator`. All unit-tested.
+- `LensBar/LensBarCamera/` is the extension target, embedded through *Embed
+  System Extensions*. The format-change policy adds a **2 s settle delay**: a
+  deferred format is applied only after the client count has stayed at 0 that
+  long, because Zoom drops to 0 on every video toggle. `lbfm` reads return the
+  advertised format; writes are remembered (`FormatStore`) even while deferred.
+  Placeholder: dark grey, "LensBar Camera / Open LensBar to start the video".
+- The target was added to `project.pbxproj` by hand (the same objects Xcode's
+  Camera Extension template creates), since the template can't be run
+  headlessly. `xcodebuild -list` and builds accept it.
+- The local package reference is now `..` instead of `../../lensbar`, so the
+  project also resolves in checkouts and worktrees not named `lensbar`.
+- Signing: Debug uses automatic signing with Apple Development for both
+  targets (a team profile with the System Extension capability is fetched
+  automatically). Release stays manual Developer ID and **fails until Phase 5**
+  with "LensBar requires a provisioning profile with the System Extension
+  feature"; don't tag a release from this branch before Phase 5.
+- Verified: `swift test`; Debug build signed (app entitlements:
+  `system-extension.install` + camera; extension: sandbox + app group
+  `B8A6HLKG3J.com.andrewcraig.LensBar`; Mach service
+  `B8A6HLKG3J.com.andrewcraig.LensBar.Camera`); unsigned universal Release build
+  with both the app and the extension binary `x86_64 arm64`.
+- Not yet verified at runtime: activation and streaming need the Phase 4
+  installer and the Phase 3 sink feed.
 
 ### Phase 3: app ↔ extension plumbing
 
