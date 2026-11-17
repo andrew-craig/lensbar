@@ -93,20 +93,36 @@ Each slider's range and default come straight from the camera (`GET_MIN`/`GET_MA
 
 **Zoom** slider — drives `CT_ZOOM_ABSOLUTE_CONTROL` on cameras with optical or digital zoom, shown only when the camera reports a usable zoom range.
 
+### LensBar Camera (virtual camera, optional)
+
+macOS lets any app that opens a camera renegotiate its format, so a call app usually resets a frame rate set in LensBar (for example 25 fps to avoid mains flicker) back to the format default. LensBar Camera fixes that: it's a virtual camera that call apps select instead of the physical one. LensBar stays the only client of the real camera and holds it at the resolution and frame rate you picked, and the virtual camera mirrors them.
+
+- **Install** — open LensBar, click **Install LensBar Camera…**, then approve it in System Settings → General → Login Items & Extensions → Camera Extensions → (i) (macOS 15+; Privacy & Security on macOS 14). LensBar must be in `/Applications`.
+- **Use** — select **LensBar Camera** in your call app *before* it previews your webcam; an app that opens the physical camera even briefly resets its frame rate. Restart apps that were open during the install so they see the new camera.
+- **LensBar must be running** for video to flow; otherwise the virtual camera shows a placeholder. Turn on **Launch at login** in the LensBar Camera section.
+- The section shows the number of apps using the virtual camera and the measured frame rate of the real camera.
+- **Remove** — click **Remove LensBar Camera…** in LensBar. Do this before deleting the app or running `brew uninstall`; deleting the app alone can leave the extension registered (`systemextensionsctl list` shows it).
+
 ### Per-camera memory
 
 Every adjustment is persisted to disk, keyed by device format/pixel-format identity, and replayed automatically the next time that specific camera connects — no need to re-dial in your settings after unplugging a camera or restarting the app.
 
 ## Architecture (for contributors)
 
-The repo is split into a headless, testable Swift Package (`LensBarCore`) and a thin Xcode app target that wraps it in a `MenuBarExtra` scene. See `AGENTS.md` for the full internals: file layout, the UVC descriptor parser, the IOKit control transfer wrapper, and the release/notarization pipeline.
+The repo is split into a headless, testable Swift Package (`LensBarCore`) and a thin Xcode app target that wraps it in a `MenuBarExtra` scene. See `AGENTS.md` for the full internals: file layout, the UVC descriptor parser, the IOKit control transfer wrapper, the LensBar Camera extension, and the release/notarization pipeline (Developer ID provisioning profiles for the app and the extension). The virtual camera design is in `PLAN.md`.
 
 ```bash
 # Build & test the headless core
 swift build
 swift test
 
-# Build the full .app bundle (must go through Xcode)
+# Build the full .app bundle (must go through Xcode); Debug signs automatically
+xcodebuild -project LensBar/LensBar.xcodeproj -scheme LensBar -configuration Debug \
+  -allowProvisioningUpdates build
+
+# Unsigned compile check of the app and the extension (what CI runs)
 xcodebuild -project LensBar/LensBar.xcodeproj -scheme LensBar -configuration Release \
-  -archivePath build/LensBar.xcarchive archive
+  -destination "generic/platform=macOS" CODE_SIGNING_ALLOWED=NO build
 ```
+
+Release archives are signed with Developer ID and need provisioning profiles for both the app and the extension; see `AGENTS.md`.

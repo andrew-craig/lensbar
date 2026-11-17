@@ -1,6 +1,10 @@
 import Foundation
 import AVFoundation
 import Combine
+import os
+import VirtualCameraKit
+
+private let viewModelLog = Logger(subsystem: "com.andrewcraig.LensBar", category: "Camera")
 
 @MainActor
 public final class CameraViewModel: ObservableObject {
@@ -34,6 +38,17 @@ public final class CameraViewModel: ObservableObject {
     @Published var focusAutoSupported: Bool = false
     @Published var exposureAutoSupported: Bool = false
 
+    /// Frame rate measured from real frame timestamps (`RateMonitor`), or nil
+    /// when the session isn't delivering frames. Display only — a mismatch with
+    /// `fps` means something reset the device; LensBar doesn't correct it.
+    @Published var actualFPS: Double?
+
+    /// Number of apps streaming LensBar Camera, as reported by the extension.
+    @Published var virtualCameraClients: Int = 0
+    /// Whether the LensBar Camera device is visible (extension installed,
+    /// approved and running).
+    @Published var virtualCameraAvailable = false
+
     // IOKit UVC — Processing Unit
     @Published var puRanges: [PUControl: ClosedRange<Double>] = [:]
     @Published var puValues: [PUControl: Double] = [:]
@@ -57,6 +72,37 @@ public final class CameraViewModel: ObservableObject {
 
     private var controller: CameraController?
     private var startTask: Task<Void, Never>?
+    private var rateTask: Task<Void, Never>?
+
+    /// Session lifetime policy: the camera runs while any demand source is
+    /// active (popover open, virtual-camera clients), not just the popover.
+    private lazy var pipeline = CapturePipeline(
+        start: { [weak self] in self?.openCamera() },
+        stop: { [weak self] in self?.closeCamera() }
+    )
+
+    /// LensBar Camera plumbing (PLAN.md §6, Phase 3): client count drives the
+    /// `.virtualCamera` demand; frames go to the extension's sink.
+    private lazy var virtualCamera = VirtualCameraCoordinator(
+        setDemand: { [weak self] demanded in
+            if demanded { self?.addDemand(.virtualCamera) } else { self?.removeDemand(.virtualCamera) }
+        },
+        statusChanged: { [weak self] status in
+            self?.virtualCameraAvailable = status.available
+            self?.virtualCameraClients = status.clients
+        },
+        clientsArrived: { [weak self] in self?.reassertSettings(reason: "virtual camera client arrived") }
+    )
+    /// Delay before reopening the camera after a capture-session runtime error.
+    static let runtimeErrorRetryDelay: Duration = .seconds(2)
+    private var deviceObservers: [NSObjectProtocol] = []
+    private var sessionObserver: NSObjectProtocol?
+    private var reopenTask: Task<Void, Never>?
+    private var reassertTask: Task<Void, Never>?
+    /// Attempts made by `reassertSettings` while another app still holds the
+    /// camera (a client switching to LensBar Camera releases the physical
+    /// device a moment after it starts the virtual one).
+    static let reassertRetryDelays: [Duration] = [.zero, .milliseconds(500), .seconds(1), .seconds(2), .seconds(4)]
 
     // Suppresses `apply*` work while `loadAVFState` is populating @Published
     // values. SwiftUI `onChange` handlers fire asynchronously after the values
@@ -64,7 +110,27 @@ public final class CameraViewModel: ObservableObject {
     // `lockForConfiguration` calls for state we just read from the device.
     private var isLoadingAVFState = false
 
-    func start() {
+    // MARK: - Demand
+
+    /// Register a reason for the capture session to run. The session opens on
+    /// the first active demand.
+    func addDemand(_ source: CaptureDemand) {
+        let wasRunning = pipeline.shouldRun
+        pipeline.add(source)
+        // Opening the popover on a session the virtual camera kept running:
+        // nothing else restores settings another app may have changed. A fresh
+        // session applies the snapshot itself.
+        if source == .popover, wasRunning {
+            reassertSettings(reason: "popover opened")
+        }
+    }
+
+    /// Withdraw a demand. The session closes once no demand is left.
+    func removeDemand(_ source: CaptureDemand) {
+        pipeline.remove(source)
+    }
+
+    private func openCamera() {
         guard controller == nil, startTask == nil else { return }
         refreshDeviceList()
         guard let device = chooseDevice() else {
@@ -75,11 +141,18 @@ public final class CameraViewModel: ObservableObject {
         launch(device: device)
     }
 
-    func stop() {
+    /// - Parameter saving: false when the device has gone away, so values read
+    ///   from a disconnected device never overwrite the saved snapshot.
+    private func closeCamera(saving: Bool = true) {
         // Flush any state changes before tearing down. `saveSnapshot` is a
         // no-op while `cameraInUse` is true so we never overwrite the saved
         // values with state we never applied.
-        saveSnapshot()
+        if saving { saveSnapshot() }
+        reopenTask?.cancel()
+        reopenTask = nil
+        reassertTask?.cancel()
+        reassertTask = nil
+        observeSession(nil)
         startTask?.cancel()
         startTask = nil
         controller?.closeSession()
@@ -87,13 +160,15 @@ public final class CameraViewModel: ObservableObject {
         session = nil
         isReady = false
         cameraInUse = false
+        stopRateUpdates()
+        virtualCamera.setSessionOpen(controller != nil)
     }
 
     /// Switch to the camera with the given uniqueID. Tears down any in-flight
     /// or open session and re-runs the setup pipeline for the new device.
     func selectDevice(id: String) {
         guard id != selectedDeviceID else { return }
-        stop()
+        closeCamera()
         UserDefaults.standard.set(id, forKey: Self.selectedDeviceDefaultsKey)
         selectedDeviceID = id
         resetPublishedState()
@@ -110,13 +185,19 @@ public final class CameraViewModel: ObservableObject {
             do {
                 let cam = CameraController(device: device)
                 let snapshot = DeviceSnapshot.load(forDeviceID: device.uniqueID)
-                let wasBusy = try await cam.openSession(applying: snapshot)
+                let wasBusy = try await cam.openSession(
+                    applying: snapshot,
+                    frameOutput: pipeline.frameTap.makeOutput()
+                )
                 if Task.isCancelled {
                     cam.closeSession()
                     return
                 }
                 controller = cam
                 session = cam.avf.session
+                observeSession(cam.avf.session)
+                startRateUpdates()
+                virtualCamera.setSessionOpen(controller != nil)
                 if wasBusy {
                     cameraInUse = true
                     // Skip AVF state load — populating @Published values would
@@ -126,6 +207,7 @@ public final class CameraViewModel: ObservableObject {
                     // override whatever settings the holding app expects.
                     loadUVCState()
                     isReady = true
+                    pushVirtualCameraFormat()
                     UserDefaults.standard.set(device.uniqueID, forKey: Self.selectedDeviceDefaultsKey)
                     return
                 }
@@ -138,6 +220,7 @@ public final class CameraViewModel: ObservableObject {
                 loadAVFState()
                 loadUVCState()
                 isReady = true
+                pushVirtualCameraFormat()
                 UserDefaults.standard.set(device.uniqueID, forKey: Self.selectedDeviceDefaultsKey)
             } catch is CancellationError {
                 return
@@ -293,6 +376,7 @@ public final class CameraViewModel: ObservableObject {
         guard !isLoadingAVFState, let cam = controller, formats.indices.contains(index) else { return }
         do {
             try cam.avf.setFormat(index: index)
+            pipeline.rateMonitor.reset()
             supportedFPS = formats[index].fps
             let live = Int(cam.avf.currentFPS.rounded())
             fps = supportedFPS.contains(live) ? live : (supportedFPS.first ?? 30)
@@ -300,6 +384,7 @@ public final class CameraViewModel: ObservableObject {
                 try? cam.avf.setFPS(Double(f))
             }
             saveSnapshot()
+            pushVirtualCameraFormat()
         } catch UVCError.deviceInUse {
             markCameraInUse()
         } catch {
@@ -311,7 +396,9 @@ public final class CameraViewModel: ObservableObject {
         guard !isLoadingAVFState, let cam = controller else { return }
         do {
             try cam.avf.setFPS(Double(rate))
+            pipeline.rateMonitor.reset()
             saveSnapshot()
+            pushVirtualCameraFormat()
         } catch UVCError.deviceInUse { markCameraInUse() }
         catch { errorMessage = error.localizedDescription }
     }
@@ -326,6 +413,82 @@ public final class CameraViewModel: ObservableObject {
     func reapplyFrameRate() {
         guard !cameraInUse, let cam = controller else { return }
         try? cam.avf.setFPS(Double(fps))
+    }
+
+    // MARK: - Re-asserting settings
+
+    private enum ReassertOutcome { case done, busy }
+
+    /// Put the user's saved settings (format, frame rate, focus/exposure modes,
+    /// UVC controls) back on the running camera. Event-triggered only — when a
+    /// LensBar Camera client arrives or the popover opens — never on a timer,
+    /// so it is not the rejected drift watchdog (PLAN.md §3). Retries briefly
+    /// while another app still holds the device, and clears `cameraInUse` once
+    /// the device is free. If a session is still opening, waits for it first.
+    func reassertSettings(reason: String) {
+        reassertTask?.cancel()
+        reassertTask = Task { @MainActor [weak self] in
+            for delay in Self.reassertRetryDelays {
+                if delay > .zero { try? await Task.sleep(for: delay) }
+                if let opening = self?.startTask { await opening.value }
+                guard !Task.isCancelled, let self else { return }
+                guard controller != nil else { return }
+                if reassertOnce(reason: reason) == .done { return }
+            }
+            viewModelLog.info("re-assert gave up: camera still in use (\(reason, privacy: .public))")
+        }
+    }
+
+    private func reassertOnce(reason: String) -> ReassertOutcome {
+        guard let cam = controller, let deviceID = selectedDeviceID else { return .done }
+        var snapshot = DeviceSnapshot.load(forDeviceID: deviceID) ?? DeviceSnapshot()
+        if snapshot.fps == nil, !cameraInUse { snapshot.fps = fps }
+        // Only bounce the frame duration when the measured stream rate shows the
+        // camera really is off target, so a re-assert on an already-correct
+        // stream doesn't stutter a live call.
+        let measured = pipeline.rateMonitor.framesPerSecond()
+        let drifted = snapshot.fps.flatMap { target in measured.map { abs($0 - Double(target)) > 1.0 } } ?? false
+        do {
+            try cam.avf.reassert(snapshot, forceRenegotiation: drifted)
+        } catch UVCError.deviceInUse {
+            return .busy
+        } catch {
+            viewModelLog.error("re-assert failed (\(reason, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+            return .done
+        }
+        let measuredText = measured.map { String(format: "%.1f", $0) } ?? "none"
+        viewModelLog.info("re-asserted settings (\(reason, privacy: .public)) fps=\(snapshot.fps ?? 0) measured=\(measuredText, privacy: .public) renegotiated=\(drifted) recoveredFromInUse=\(self.cameraInUse)")
+        pipeline.rateMonitor.reset()
+        if let uvc = cam.uvc { replayUVC(snapshot: snapshot, uvc: uvc) }
+        cameraInUse = false
+        loadAVFState()
+        loadUVCState()
+        pushVirtualCameraFormat()
+        return .done
+    }
+
+    // MARK: - Measured frame rate
+
+    /// Poll the rate monitor twice a second while a session is open. Frames
+    /// are recorded on the capture queue; publishing at a fixed cadence keeps
+    /// SwiftUI updates off the per-frame path.
+    private func startRateUpdates() {
+        rateTask?.cancel()
+        pipeline.rateMonitor.reset()
+        let monitor = pipeline.rateMonitor
+        rateTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let measured = monitor.framesPerSecond().map { ($0 * 10).rounded() / 10 }
+                if let self, self.actualFPS != measured { self.actualFPS = measured }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func stopRateUpdates() {
+        rateTask?.cancel()
+        rateTask = nil
+        actualFPS = nil
     }
 
     func applyFocusMode() {
@@ -454,5 +617,91 @@ public final class CameraViewModel: ObservableObject {
         }
 
         snap.save(forDeviceID: deviceID)
+    }
+}
+
+// MARK: - Virtual camera, unplug / replug
+
+extension CameraViewModel {
+    /// Start serving LensBar Camera: watch its client count, feed its sink
+    /// while the capture session runs, and recover from camera unplug/replug.
+    /// Called once at app launch, so a client that is already streaming when
+    /// LensBar (re)launches gets video without the popover being opened.
+    public func startVirtualCamera() {
+        guard deviceObservers.isEmpty else { return }
+        observeDeviceConnections()
+        virtualCamera.start(frameTap: pipeline.frameTap)
+    }
+
+    /// Push the format LensBar is producing to the extension.
+    private func pushVirtualCameraFormat() {
+        guard let cam = controller else { return }
+        let identity = cam.avf.activeFormatIdentity()
+        let live = cam.avf.currentFPS
+        virtualCamera.pushFormat(width: identity.width, height: identity.height, fps: live > 0 ? live : Double(fps))
+    }
+
+    /// Close the session when the camera in use is unplugged, and reopen when
+    /// a camera comes back while something still wants capture. Clients keep
+    /// LensBar Camera selected throughout; the extension shows its placeholder
+    /// during the gap.
+    private func observeDeviceConnections() {
+        let center = NotificationCenter.default
+        deviceObservers.append(center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification,
+                                                  object: nil, queue: .main) { [weak self] note in
+            let uniqueID = (note.object as? AVCaptureDevice)?.uniqueID
+            MainActor.assumeIsolated { self?.deviceDisconnected(uniqueID: uniqueID) }
+        })
+        deviceObservers.append(center.addObserver(forName: AVCaptureDevice.wasConnectedNotification,
+                                                  object: nil, queue: .main) { [weak self] note in
+            let uniqueID = (note.object as? AVCaptureDevice)?.uniqueID
+            MainActor.assumeIsolated { self?.deviceConnected(uniqueID: uniqueID) }
+        })
+    }
+
+    private func deviceDisconnected(uniqueID: String?) {
+        guard let uniqueID, !VirtualCameraIdentity.isOwnDevice(uniqueID: uniqueID) else { return }
+        refreshDeviceList()
+        guard uniqueID == selectedDeviceID, controller != nil || startTask != nil else { return }
+        viewModelLog.info("camera disconnected; waiting for it to return")
+        closeCamera(saving: false)
+        errorMessage = "Camera disconnected."
+    }
+
+    private func deviceConnected(uniqueID: String?) {
+        guard let uniqueID, !VirtualCameraIdentity.isOwnDevice(uniqueID: uniqueID) else { return }
+        refreshDeviceList()
+        guard pipeline.shouldRun, controller == nil, startTask == nil else { return }
+        viewModelLog.info("camera connected; reopening capture")
+        errorMessage = nil
+        openCamera()
+    }
+
+    /// Watch the running session for runtime errors (e.g. the camera stalls or
+    /// is reset underneath it) and reopen once after a short delay. A
+    /// disconnect is left to `deviceDisconnected`.
+    private func observeSession(_ session: AVCaptureSession?) {
+        if let sessionObserver { NotificationCenter.default.removeObserver(sessionObserver) }
+        sessionObserver = nil
+        guard let session else { return }
+        sessionObserver = NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
+                                                                 object: session, queue: .main) { [weak self] note in
+            let error = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            let description = error?.localizedDescription ?? "unknown"
+            MainActor.assumeIsolated { self?.sessionRuntimeError(description) }
+        }
+    }
+
+    private func sessionRuntimeError(_ description: String) {
+        guard let cam = controller else { return }
+        viewModelLog.error("capture session runtime error: \(description, privacy: .public)")
+        guard cam.avf.device.isConnected else { return }
+        closeCamera()
+        reopenTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.runtimeErrorRetryDelay)
+            guard !Task.isCancelled, let self else { return }
+            reopenTask = nil
+            if pipeline.shouldRun, controller == nil, startTask == nil { openCamera() }
+        }
     }
 }

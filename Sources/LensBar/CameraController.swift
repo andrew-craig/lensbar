@@ -33,12 +33,13 @@ final class CameraController {
     /// firmware default. Returns whether the device was held by another app at
     /// open time; when true, no settings (AVF or UVC) are restored so we don't
     /// fight whatever app currently owns the camera.
-    func openSession(applying snapshot: DeviceSnapshot?) async throws -> Bool {
+    func openSession(applying snapshot: DeviceSnapshot?,
+                     frameOutput: sending AVCaptureVideoDataOutput? = nil) async throws -> Bool {
         let locationID = Self.locationID(for: device)
         let deviceName = device.localizedName
         log.info("openSession device=\(deviceName, privacy: .public) uniqueID=\(self.device.uniqueID, privacy: .public) parsedLocationID=\(locationID.map { String(format: "0x%08X", $0) } ?? "nil", privacy: .public)")
 
-        async let avfOpen: Bool = avf.openSession(applying: snapshot)
+        async let avfOpen: Bool = avf.openSession(applying: snapshot, frameOutput: frameOutput)
         async let uvcSetup: IOKitUVCController? = Self.connectUVC(
             locationID: locationID,
             deviceName: deviceName

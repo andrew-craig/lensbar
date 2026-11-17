@@ -1,0 +1,17 @@
+# TEMPORARY: relaxes the two default rules the existing code base breaks most,
+# so local `swiftlint lint --strict` agrees with the SwiftLint CI job (which
+# passes today). Remove these relaxations and fix the code: chalk task
+# chore_cee1.
+
+disabled_rules:
+  - trailing_comma
+
+identifier_name:
+  min_length:
+    warning: 1
+    error: 1
+
+excluded:
+  - .build
+  - build
+  - spike

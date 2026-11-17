@@ -1,0 +1,123 @@
+name: Set up Developer ID signing
+description: >
+  Imports the Developer ID Application certificate into a temporary keychain and
+  installs the Developer ID provisioning profiles for the app and the LensBar
+  Camera system extension. Outputs the profile names for
+  PROVISIONING_PROFILE_SPECIFIER and ExportOptions.plist.
+
+inputs:
+  certificate-p12-base64:
+    description: Base64 of the Developer ID Application .p12
+    required: true
+  certificate-password:
+    description: Password of the .p12
+    required: true
+  keychain-password:
+    description: Password for the temporary build keychain
+    required: true
+  app-profile-base64:
+    description: Base64 of the app's Developer ID .provisionprofile (System Extension capability)
+    required: true
+  camera-profile-base64:
+    description: Base64 of the LensBar Camera extension's Developer ID .provisionprofile
+    required: true
+  team-id:
+    description: Apple Developer team ID the profiles must belong to
+    required: true
+
+outputs:
+  app-profile-name:
+    description: Name of the installed app profile
+    value: ${{ steps.profiles.outputs.app-profile-name }}
+  camera-profile-name:
+    description: Name of the installed extension profile
+    value: ${{ steps.profiles.outputs.camera-profile-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Import signing certificate
+      shell: bash
+      env:
+        CERT_B64: ${{ inputs.certificate-p12-base64 }}
+        CERT_PW: ${{ inputs.certificate-password }}
+        KC_PW: ${{ inputs.keychain-password }}
+      run: |
+        set -euo pipefail
+        echo "$CERT_B64" | base64 -d > "$RUNNER_TEMP/cert.p12"
+        security create-keychain -p "$KC_PW" build.keychain
+        security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "$KC_PW" build.keychain
+        security set-keychain-settings -lut 21600 build.keychain
+        security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$CERT_PW" \
+          -T /usr/bin/codesign -T /usr/bin/security
+        security set-key-partition-list -S apple-tool:,apple:,codesign: \
+          -s -k "$KC_PW" build.keychain
+        rm "$RUNNER_TEMP/cert.p12"
+
+    - name: Install provisioning profiles
+      id: profiles
+      shell: bash
+      env:
+        APP_PROFILE_B64: ${{ inputs.app-profile-base64 }}
+        CAMERA_PROFILE_B64: ${{ inputs.camera-profile-base64 }}
+        TEAM_ID: ${{ inputs.team-id }}
+      run: |
+        set -euo pipefail
+        # Xcode 16+ reads UserData; older tools read MobileDevice. Install to both.
+        DIRS=(
+          "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          "$HOME/Library/MobileDevice/Provisioning Profiles"
+        )
+        mkdir -p "${DIRS[@]}"
+
+        # install <base64> <expected bundle id> <output name> [required entitlement]
+        install_profile() {
+          local b64="$1" bundle_id="$2" output="$3" required_entitlement="${4:-}"
+          local raw="$RUNNER_TEMP/$output.provisionprofile"
+          local plist="$RUNNER_TEMP/$output.plist"
+          if [ -z "$b64" ]; then
+            echo "::error::Provisioning profile secret for $bundle_id is empty"
+            exit 1
+          fi
+          echo "$b64" | base64 -d > "$raw"
+          security cms -D -i "$raw" > "$plist"
+          pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null || true; }
+
+          local name uuid app_id all_devices expiry
+          name="$(pb Name)"
+          uuid="$(pb UUID)"
+          app_id="$(pb Entitlements:com.apple.application-identifier)"
+          all_devices="$(pb ProvisionsAllDevices)"
+          expiry="$(plutil -extract ExpirationDate raw -o - "$plist")"  # ISO 8601, UTC
+
+          if [ "$app_id" != "$TEAM_ID.$bundle_id" ]; then
+            echo "::error::Profile '$name' is for '$app_id', expected '$TEAM_ID.$bundle_id'"
+            exit 1
+          fi
+          if [ "$all_devices" != "true" ]; then
+            echo "::error::Profile '$name' is not a Developer ID profile (ProvisionsAllDevices is not true)"
+            exit 1
+          fi
+          if [ -n "$required_entitlement" ] && [ "$(pb "Entitlements:$required_entitlement")" != "true" ]; then
+            echo "::error::Profile '$name' lacks $required_entitlement (enable the System Extension capability on the App ID and regenerate it)"
+            exit 1
+          fi
+          if [[ "$expiry" < "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+            echo "::error::Profile '$name' expired on $expiry"
+            exit 1
+          fi
+
+          for dir in "${DIRS[@]}"; do
+            cp "$raw" "$dir/$uuid.provisionprofile"
+          done
+          echo "Installed '$name' ($uuid) for $bundle_id, expires $expiry"
+          echo "$output=$name" >> "$GITHUB_OUTPUT"
+          rm "$raw" "$plist"
+        }
+
+        install_profile "$APP_PROFILE_B64" com.andrewcraig.LensBar \
+          app-profile-name com.apple.developer.system-extension.install
+        install_profile "$CAMERA_PROFILE_B64" com.andrewcraig.LensBar.Camera \
+          camera-profile-name

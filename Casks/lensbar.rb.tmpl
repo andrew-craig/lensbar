@@ -19,7 +19,17 @@ cask "lensbar" do
 
   app "LensBar.app"
 
+  uninstall quit: "com.andrewcraig.LensBar"
+
   zap trash: [
     "~/Library/Preferences/com.andrewcraig.LensBar.plist",
   ]
+
+  caveats <<~EOS
+    LensBar Camera (the optional virtual camera) is a system extension.
+    Remove it in LensBar (menu-bar icon → "Remove LensBar Camera…") BEFORE
+    running `brew uninstall`; deleting the app alone can leave the extension
+    registered. To check, run:
+      systemextensionsctl list
+  EOS
 end

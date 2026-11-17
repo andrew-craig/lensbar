@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import CoreMedia
+import VirtualCameraKit
 
 /// AVFoundation-based camera controls. Works with any AVCaptureDevice;
 /// device-specific controls (manual exposure, raw UVC properties) are
@@ -23,12 +24,15 @@ final class AVFoundationController {
 
     /// Enumerate every external camera the system advertises plus the built-in
     /// wide-angle one. The picker UI lets the user choose which to control.
+    /// LensBar's own virtual camera (also `.externalUnknown`) is excluded so
+    /// LensBar can never capture itself.
     nonisolated static func enumerateCameras() -> [AVCaptureDevice] {
-        AVCaptureDevice.DiscoverySession(
+        let devices = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.externalUnknown, .builtInWideAngleCamera],
             mediaType: .video,
             position: .unspecified
         ).devices
+        return VirtualCameraIdentity.excludingOwnDevice(devices) { $0.uniqueID }
     }
 
     // MARK: - Session lifecycle
@@ -37,11 +41,16 @@ final class AVFoundationController {
     /// before `startRunning()` so the camera comes up in its restored
     /// configuration without a default→user transition.
     ///
+    /// `frameOutput`, when given, is added to the session before
+    /// `startRunning()`. Adding an output resets the device's frame duration,
+    /// so it goes in ahead of the post-start frame-rate write below.
+    ///
     /// Returns `wasBusy` — true if another app held the device at probe time.
     /// When busy, no writes are issued (neither AVF lock nor UVC) so we don't
     /// fight whatever app currently owns the camera. The caller skips state
     /// restoration in that case.
-    func openSession(applying snapshot: DeviceSnapshot?) async throws -> Bool {
+    func openSession(applying snapshot: DeviceSnapshot?,
+                     frameOutput: AVCaptureVideoDataOutput? = nil) async throws -> Bool {
         let sess = AVCaptureSession()
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -57,11 +66,17 @@ final class AVFoundationController {
         // transition. On macOS, explicit `activeFormat` writes inside
         // `lockForConfiguration` are honored even with the default session
         // preset, so no preset change is needed.
-        if !busy, let snapshot {
-            sess.beginConfiguration()
-            applySnapshotPreStart(snapshot, session: sess)
-            sess.commitConfiguration()
+        //
+        // The frame output is added in the same configuration, ahead of the
+        // format write, so the format write is the last word on activeFormat.
+        sess.beginConfiguration()
+        if let frameOutput, sess.canAddOutput(frameOutput) {
+            sess.addOutput(frameOutput)
         }
+        if !busy, let snapshot {
+            applySnapshotPreStart(snapshot, session: sess)
+        }
+        sess.commitConfiguration()
 
         let queue = sessionQueue
         await withCheckedContinuation { continuation in
@@ -83,6 +98,9 @@ final class AVFoundationController {
         // don't survive the VS_PROBE/VS_COMMIT negotiation at startRunning, so
         // the camera ends up streaming at the format's default frame rate even
         // though the device reports the saved value back.
+        //
+        // The video data output (FrameTap) was attached pre-start, so this
+        // write also re-asserts the rate after that reconfiguration.
         //
         // NOTE: the fps write here is still clobbered shortly after, when
         // SwiftUI attaches the preview layer to the running session — that
@@ -304,6 +322,51 @@ final class AVFoundationController {
         try configure {
             $0.activeVideoMinFrameDuration = dur
             $0.activeVideoMaxFrameDuration = dur
+        }
+    }
+
+    /// Put the saved format, frame rate and focus/exposure modes back on the
+    /// running session after another app may have changed them (e.g. a client
+    /// that opened the physical camera directly before switching to LensBar
+    /// Camera). Missing or unsupported snapshot values are skipped.
+    ///
+    /// Writing a frame duration equal to the one AVFoundation already holds
+    /// does not renegotiate the stream, and the property can keep LensBar's
+    /// value while the camera actually runs at another app's rate. With
+    /// `forceRenegotiation` the duration is first reset to the format default
+    /// in a separate configuration, so the target write is a real change.
+    ///
+    /// - Throws: `UVCError.deviceInUse` while another app holds the device.
+    func reassert(_ snapshot: DeviceSnapshot, forceRenegotiation: Bool) throws {
+        if let w = snapshot.formatWidth, let h = snapshot.formatHeight, let pf = snapshot.formatPixelFormat,
+           let match = Self.matchFormat(in: device.formats, width: w, height: h, pixelFormat: pf),
+           match != device.activeFormat {
+            try configure { $0.activeFormat = match }
+        }
+        let target: CMTime? = snapshot.fps.flatMap { fps in
+            device.activeFormat.videoSupportedFrameRateRanges
+                .min(by: { abs($0.maxFrameRate - Double(fps)) < abs($1.maxFrameRate - Double(fps)) })
+                .flatMap { abs($0.maxFrameRate - Double(fps)) <= 1.0 ? $0.minFrameDuration : nil }
+        }
+        if let target, forceRenegotiation, device.activeVideoMinFrameDuration == target {
+            try configure {
+                $0.activeVideoMinFrameDuration = .invalid
+                $0.activeVideoMaxFrameDuration = .invalid
+            }
+        }
+        try configure { dev in
+            if let target {
+                dev.activeVideoMinFrameDuration = target
+                dev.activeVideoMaxFrameDuration = target
+            }
+            if let focusAuto = snapshot.focusAuto {
+                let mode: AVCaptureDevice.FocusMode = focusAuto ? .continuousAutoFocus : .locked
+                if dev.isFocusModeSupported(mode) { dev.focusMode = mode }
+            }
+            if let exposureAuto = snapshot.exposureAuto {
+                let mode: AVCaptureDevice.ExposureMode = exposureAuto ? .continuousAutoExposure : .locked
+                if dev.isExposureModeSupported(mode) { dev.exposureMode = mode }
+            }
         }
     }
 
