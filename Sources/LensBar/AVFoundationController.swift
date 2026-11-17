@@ -325,6 +325,51 @@ final class AVFoundationController {
         }
     }
 
+    /// Put the saved format, frame rate and focus/exposure modes back on the
+    /// running session after another app may have changed them (e.g. a client
+    /// that opened the physical camera directly before switching to LensBar
+    /// Camera). Missing or unsupported snapshot values are skipped.
+    ///
+    /// Writing a frame duration equal to the one AVFoundation already holds
+    /// does not renegotiate the stream, and the property can keep LensBar's
+    /// value while the camera actually runs at another app's rate. With
+    /// `forceRenegotiation` the duration is first reset to the format default
+    /// in a separate configuration, so the target write is a real change.
+    ///
+    /// - Throws: `UVCError.deviceInUse` while another app holds the device.
+    func reassert(_ snapshot: DeviceSnapshot, forceRenegotiation: Bool) throws {
+        if let w = snapshot.formatWidth, let h = snapshot.formatHeight, let pf = snapshot.formatPixelFormat,
+           let match = Self.matchFormat(in: device.formats, width: w, height: h, pixelFormat: pf),
+           match != device.activeFormat {
+            try configure { $0.activeFormat = match }
+        }
+        let target: CMTime? = snapshot.fps.flatMap { fps in
+            device.activeFormat.videoSupportedFrameRateRanges
+                .min(by: { abs($0.maxFrameRate - Double(fps)) < abs($1.maxFrameRate - Double(fps)) })
+                .flatMap { abs($0.maxFrameRate - Double(fps)) <= 1.0 ? $0.minFrameDuration : nil }
+        }
+        if let target, forceRenegotiation, device.activeVideoMinFrameDuration == target {
+            try configure {
+                $0.activeVideoMinFrameDuration = .invalid
+                $0.activeVideoMaxFrameDuration = .invalid
+            }
+        }
+        try configure { dev in
+            if let target {
+                dev.activeVideoMinFrameDuration = target
+                dev.activeVideoMaxFrameDuration = target
+            }
+            if let focusAuto = snapshot.focusAuto {
+                let mode: AVCaptureDevice.FocusMode = focusAuto ? .continuousAutoFocus : .locked
+                if dev.isFocusModeSupported(mode) { dev.focusMode = mode }
+            }
+            if let exposureAuto = snapshot.exposureAuto {
+                let mode: AVCaptureDevice.ExposureMode = exposureAuto ? .continuousAutoExposure : .locked
+                if dev.isExposureModeSupported(mode) { dev.exposureMode = mode }
+            }
+        }
+    }
+
     // MARK: - Private
 
     private func configure(_ block: (AVCaptureDevice) -> Void) throws {

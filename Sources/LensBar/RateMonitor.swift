@@ -6,8 +6,11 @@ import VirtualCameraKit
 /// Thread-safe wrapper around `FrameRateEstimator`. `FrameTap` records from the
 /// capture queue; the UI reads from the main actor.
 ///
-/// This only *reports* the real rate. It never corrects the device: re-asserting
-/// the frame rate when it drifts is the rejected watchdog approach (PLAN.md §3).
+/// This only *reports* the real rate. It never triggers a correction on its own:
+/// re-asserting the frame rate whenever it drifts is the rejected watchdog
+/// approach (PLAN.md §3). `CameraViewModel.reassertSettings` reads it once, at
+/// a client arrival or popover open, to decide whether a forced renegotiation
+/// is needed.
 final class RateMonitor: Sendable {
     private let estimator: OSAllocatedUnfairLock<FrameRateEstimator>
 

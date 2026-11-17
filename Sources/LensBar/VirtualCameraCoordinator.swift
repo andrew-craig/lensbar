@@ -36,14 +36,22 @@ final class VirtualCameraCoordinator {
 
     private let setDemand: (Bool) -> Void
     private let statusChanged: (Status) -> Void
+    private let clientsArrived: () -> Void
 
     /// - Parameters:
     ///   - setDemand: add (`true`) or remove (`false`) the `.virtualCamera`
     ///     capture demand.
     ///   - statusChanged: availability or client count changed.
-    init(setDemand: @escaping (Bool) -> Void, statusChanged: @escaping (Status) -> Void) {
+    ///   - clientsArrived: the client count went from zero to non-zero. Fires
+    ///     even inside the grace period (when the demand never dropped), since
+    ///     that is exactly when a client may have just come back from using the
+    ///     physical camera directly and left it at its own frame rate.
+    init(setDemand: @escaping (Bool) -> Void,
+         statusChanged: @escaping (Status) -> Void,
+         clientsArrived: @escaping () -> Void) {
         self.setDemand = setDemand
         self.statusChanged = statusChanged
+        self.clientsArrived = clientsArrived
     }
 
     /// Begin watching the device and route `frameTap`'s frames to the sink.
@@ -93,7 +101,12 @@ final class VirtualCameraCoordinator {
     // MARK: Private
 
     private func clientsChanged(_ count: Int) {
+        let arrived = gate.clients == 0 && count > 0
         perform(gate.clientsChanged(to: count))
+        if arrived {
+            coordinatorLog.info("first client arrived: re-asserting camera settings")
+            clientsArrived()
+        }
         // Retries an attach that failed earlier; a no-op when already attached.
         updateSink()
         publish()
