@@ -22,3 +22,32 @@ jobs:
 
       - name: Test
         run: swift test
+
+  xcode-build:
+    name: Xcode build (app + LensBar Camera, universal)
+    # Same image as the release jobs, so the pbxproj format stays openable.
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Unsigned, so it needs no secrets and runs on fork PRs. Catches compile
+      # breaks in the app target and the camera extension, which `swift test`
+      # doesn't build, for both architectures the universal DMG ships.
+      - name: Build
+        run: |
+          xcodebuild -project LensBar/LensBar.xcodeproj \
+            -scheme LensBar -configuration Release \
+            -destination "generic/platform=macOS" \
+            -derivedDataPath build/dd \
+            ARCHS="arm64 x86_64" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Check the extension is embedded
+        run: |
+          APP=build/dd/Build/Products/Release/LensBar.app
+          EXT="$APP/Contents/Library/SystemExtensions/com.andrewcraig.LensBar.Camera.systemextension"
+          test -d "$EXT" || { echo "::error::LensBar Camera extension not embedded"; exit 1; }
+          lipo -archs "$APP/Contents/MacOS/LensBar"
+          lipo -archs "$EXT/Contents/MacOS/com.andrewcraig.LensBar.Camera"

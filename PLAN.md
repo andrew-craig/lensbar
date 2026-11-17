@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 4 done in code (2026-11-17; Phases 3 and 4 not yet exercised against an activated extension, see their results). Phase 5 not started.
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 done in code (2026-11-17; Phases 3 and 4 not yet exercised against an activated extension, and Phase 5 not yet run in CI, see their results).
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 
@@ -427,6 +427,63 @@ This phase is useful on its own and carries no signing risk.
 - Update `CLAUDE.md`, `README.md` and the `run-app` skill (activation,
   `systemextensionsctl list`, log predicates for the extension, how to replace
   an installed build).
+
+#### Phase 5 results (2026-11-17)
+
+- Release configs read `PROVISIONING_PROFILE_SPECIFIER` from per-target
+  variables, `LENSBAR_APP_PROFILE` ("LensBar Developer ID") and
+  `LENSBAR_CAMERA_PROFILE` ("LensBar Camera Developer ID"), because a
+  command-line `PROVISIONING_PROFILE_SPECIFIER` would apply to every target.
+  A local signed Release archive now fails with "No profile … matching
+  'LensBar Developer ID'" (one per target) instead of the System Extension
+  error, which confirms the names reach both targets.
+- `.github/actions/setup-signing` (composite, used by both build jobs)
+  imports the certificate and installs the profiles from
+  `APP_PROVISIONING_PROFILE_BASE64` / `CAMERA_PROVISIONING_PROFILE_BASE64`.
+  It rejects a wrong bundle ID, a development profile
+  (`ProvisionsAllDevices` not true), an app profile without
+  `system-extension.install`, or an expired one, and outputs the names. The
+  workflow passes them to `xcodebuild` and patches them into
+  `ExportOptions.plist` (`provisioningProfiles`, `signingCertificate`).
+  The checks were exercised against a development profile on this Mac.
+- `scripts/verify-signing.sh` runs after export (`pre-notarize`: Developer ID
+  authority, timestamp, runtime, both embedded profiles, entitlements, Mach
+  service name, archs, Gatekeeper sees "Unnotarized Developer ID") and after
+  stapling (`post-staple`: Gatekeeper accepts, ticket stapled). The DMG gets
+  an `spctl -t open` check. The `codesign` stage passes on a Debug build;
+  the Debug extension embeds no profile (automatic signing skips it when no
+  entitlement needs one), so profiles are only required in the Developer ID
+  stages.
+- Found while adding the arch check: the "arm64-only" `LensBar.dmg` was in
+  fact universal (Release has `ONLY_ACTIVE_ARCH = NO`, and `-destination`
+  doesn't narrow `ARCHS` for archive). The job now passes `ARCHS=arm64`.
+- Pre-release mode: a `-` suffixed tag or `workflow_dispatch` with
+  `prerelease: true` marks the GitHub release as a pre-release and skips the
+  Homebrew tap; `MARKETING_VERSION` takes the numeric part; dispatch runs
+  tag the built commit, so the validation run can come from this branch.
+- `ci.yml` has an `xcode-build` job on `macos-26`: unsigned
+  (`CODE_SIGNING_ALLOWED=NO`) universal Release build, checks the extension
+  is embedded. Verified locally (both binaries `x86_64 arm64`).
+- Cask: `uninstall quit:` and a `caveats` note to remove LensBar Camera in
+  the app before `brew uninstall`.
+- Docs: `AGENTS.md` (= `CLAUDE.md`), `README.md` (LensBar Camera section,
+  build commands), `run-app` skill (activation from `/Applications`,
+  approval, `systemextensionsctl`, log predicates per subsystem/category,
+  replacing and removing builds).
+- **Manual steps left (need the developer account):**
+  1. In Certificates, Identifiers & Profiles, enable *System Extension* on the
+     `com.andrewcraig.LensBar` App ID; register `com.andrewcraig.LensBar.Camera`
+     (App Groups capability with `B8A6HLKG3J.com.andrewcraig.LensBar` if the
+     portal asks).
+  2. Create two **Developer ID** provisioning profiles named
+     "LensBar Developer ID" and "LensBar Camera Developer ID" (any names work
+     in CI; these match the local defaults).
+  3. Add them as secrets: `base64 -i X.provisionprofile | gh secret set
+     APP_PROVISIONING_PROFILE_BASE64` (and `CAMERA_…`).
+  4. Run Release via `workflow_dispatch` from `feature/virtual-camera` with a
+     tag like `v<next>-rc1` (pre-release), then install the DMG on a clean
+     account, Install + approve LensBar Camera and stream it into Zoom. That
+     answers open question 2.
 
 ### Phase 6: verification matrix
 

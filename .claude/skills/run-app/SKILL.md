@@ -15,7 +15,7 @@ behavior **must go through the Xcode build**. `swift run` does not exist here.
 
 ```bash
 swift build      # compile LensBarCore
-swift test       # 44+ unit tests: descriptor parsing, location-ID parsing, byte helpers
+swift test       # 100+ unit tests: UVC parsing, demand gate, format codec, extension status, …
 ```
 
 Use this for pure-logic changes (UVC parsing, snapshot codec, etc.). It cannot exercise
@@ -71,8 +71,28 @@ alias in this environment — always use the absolute path `/usr/bin/log`.**
   --predicate 'subsystem == "com.lensbar" AND category == "camera"'
 ```
 
-Existing categories: `camera` (CameraController: openSession, topology, busy state),
-`uvc` (control-support probe summary).
+Two subsystems are in use:
+
+- `com.lensbar`: `camera` (CameraController: openSession, topology, busy state),
+  `uvc` (control-support probe summary), and `extension` (the LensBar Camera
+  extension itself: client count, format changes, sink/placeholder switching).
+- `com.andrewcraig.LensBar`: `Camera` (CameraViewModel), `VirtualCamera`
+  (monitor + coordinator: device lookup, `lbcc` count, `lbfm` pushes, demand),
+  `VirtualCameraSink` (attach/detach, queue-full drops), `ExtensionInstaller`
+  (sysextd requests and results), `LaunchAtLogin`.
+
+```bash
+# Everything virtual-camera related, app and extension
+/usr/bin/log show --last 10m --info --predicate \
+  'subsystem == "com.andrewcraig.LensBar" OR (subsystem == "com.lensbar" AND category == "extension")'
+
+# The extension runs as a separate process (owned by _cmiodalassistants), so
+# filter by process too when the subsystem isn't enough
+/usr/bin/log stream --info --predicate 'process == "com.andrewcraig.LensBar.Camera"'
+
+# Activation / approval problems are logged by the system, not by LensBar
+/usr/bin/log show --last 10m --predicate 'process == "sysextd"'
+```
 
 ### Temporary diagnostics
 
@@ -96,6 +116,40 @@ directly and measures real frame delivery via `AVCaptureVideoDataOutput` — inv
 isolating "does the camera/AVFoundation do X" from "does the app's orchestration do X".
 Match the app's conditions (e.g. attach an `AVCaptureVideoPreviewLayer` to the running
 session) or the harness will pass while the app fails.
+
+## LensBar Camera (system extension)
+
+The virtual camera is a CoreMediaIO system extension embedded in the app
+(`Contents/Library/SystemExtensions/com.andrewcraig.LensBar.Camera.systemextension`).
+Everything about it — install, approval, upgrade — goes through `sysextd`, and
+the user has to approve it, so plan for the user to click and type their password.
+
+- **Activation needs the app in `/Applications`.** Copy the Debug build there
+  (`ditto build/dd/Build/Products/Debug/LensBar.app /Applications/LensBar.app`)
+  and launch that copy. From anywhere else Install fails with
+  `unsupportedParentBundleLocation` unless `systemextensionsctl developer on`
+  (needs SIP off) is set.
+- **Approval:** after Install, the user goes to System Settings → General →
+  Login Items & Extensions → Camera Extensions → (i) and toggles LensBar Camera
+  on (macOS 15+; macOS 14: Privacy & Security). In the spike the first attempt
+  didn't always stick; retry the toggle.
+- **State:** `systemextensionsctl list` shows the team ID, bundle ID, version
+  and state (`[activated enabled]`, `[activated waiting for user]`,
+  `[terminated waiting to uninstall on reboot]`).
+- **Replacing an installed build:** Debug builds always answer `.replace`
+  (their version never changes), so relaunching a new Debug copy from
+  `/Applications` upgrades the extension without re-approval. Release builds
+  replace only when `CFBundleShortVersionString` / `CFBundleVersion` differ
+  (CI uses the run number). Replacing restarts the extension, which cuts live
+  calls briefly; Zoom recovers by itself.
+- **Removing:** use **Remove LensBar Camera…** in the app.
+  `systemextensionsctl uninstall B8A6HLKG3J com.andrewcraig.LensBar.Camera`
+  only works with SIP off. An old `com.andrewcraig.LensBarSpike.Camera` from
+  the Phase 0 spike may still be listed and show up as a second virtual camera.
+- **Client apps cache the device list:** restart Zoom/browsers after installing.
+- **Checking a build's signing:**
+  `scripts/verify-signing.sh build/dd/Build/Products/Debug/LensBar.app codesign arm64`
+  (the release workflow runs the stricter `pre-notarize` / `post-staple` stages).
 
 ## Camera-behavior gotchas (hard-won)
 

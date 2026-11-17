@@ -8,5 +8,17 @@
   <string>B8A6HLKG3J</string>
   <key>signingStyle</key>
   <string>manual</string>
+  <key>signingCertificate</key>
+  <string>Developer ID Application</string>
+  <!-- Defaults match LENSBAR_APP_PROFILE / LENSBAR_CAMERA_PROFILE in the
+       project. The release workflow overwrites them with the names read from
+       the installed profiles. -->
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>com.andrewcraig.LensBar</key>
+    <string>LensBar Developer ID</string>
+    <key>com.andrewcraig.LensBar.Camera</key>
+    <string>LensBar Camera Developer ID</string>
+  </dict>
 </dict>
 </plist>

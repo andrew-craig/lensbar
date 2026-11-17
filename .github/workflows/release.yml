@@ -6,8 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag for the release (e.g. v0.1.0)"
+        description: "Tag for the release (e.g. v0.1.0, or v0.1.0-rc1 for a pre-release)"
         required: true
+      prerelease:
+        description: "Pre-release: mark the GitHub release as a pre-release and don't update the Homebrew tap. Tags with a '-' suffix are always pre-releases."
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -18,14 +22,26 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      bundle-version: ${{ steps.version.outputs.bundle-version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Resolve version from tag
         id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease || false }}
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
-          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # CFBundleShortVersionString must be numeric: v1.2.0-rc1 -> 1.2.0
+          BUNDLE_VERSION="${VERSION%%-*}"
+          PRERELEASE=false
+          if [ "$PRERELEASE_INPUT" = true ] || [ "$VERSION" != "$BUNDLE_VERSION" ]; then
+            PRERELEASE=true
+          fi
+          echo "tag=$TAG"                       >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"               >> "$GITHUB_OUTPUT"
+          echo "bundle-version=$BUNDLE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE"         >> "$GITHUB_OUTPUT"
 
   build-arm64:
     needs: resolve-version
@@ -35,23 +51,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Import signing certificate
-        env:
-          CERT_B64: ${{ secrets.BUILD_CERT_P12_BASE64 }}
-          CERT_PW: ${{ secrets.BUILD_CERT_PASSWORD }}
-          KC_PW: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          echo "$CERT_B64" | base64 -d > cert.p12
-          security create-keychain -p "$KC_PW" build.keychain
-          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KC_PW" build.keychain
-          security set-keychain-settings -lut 21600 build.keychain
-          security import cert.p12 -k build.keychain -P "$CERT_PW" \
-            -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KC_PW" build.keychain
-          rm cert.p12
+      - name: Set up signing
+        id: signing
+        uses: ./.github/actions/setup-signing
+        with:
+          certificate-p12-base64: ${{ secrets.BUILD_CERT_P12_BASE64 }}
+          certificate-password: ${{ secrets.BUILD_CERT_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+          app-profile-base64: ${{ secrets.APP_PROVISIONING_PROFILE_BASE64 }}
+          camera-profile-base64: ${{ secrets.CAMERA_PROVISIONING_PROFILE_BASE64 }}
+          team-id: ${{ secrets.DEVELOPMENT_TEAM }}
 
       - name: Build & archive
         run: |
@@ -59,19 +68,34 @@ jobs:
             -scheme LensBar -configuration Release \
             -destination "platform=macOS,arch=arm64" \
             -archivePath build/LensBar.xcarchive archive \
-            MARKETING_VERSION="${{ needs.resolve-version.outputs.version }}" \
+            ARCHS=arm64 \
+            MARKETING_VERSION="${{ needs.resolve-version.outputs.bundle-version }}" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGN_IDENTITY="${{ secrets.DEVELOPER_ID_IDENTITY }}" \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${{ secrets.DEVELOPMENT_TEAM }}" \
-            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime"
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
+            LENSBAR_APP_PROFILE="${{ steps.signing.outputs.app-profile-name }}" \
+            LENSBAR_CAMERA_PROFILE="${{ steps.signing.outputs.camera-profile-name }}"
 
       - name: Export .app
+        env:
+          APP_PROFILE: ${{ steps.signing.outputs.app-profile-name }}
+          CAMERA_PROFILE: ${{ steps.signing.outputs.camera-profile-name }}
         run: |
+          /usr/libexec/PlistBuddy \
+            -c "Set :provisioningProfiles:com.andrewcraig.LensBar \"$APP_PROFILE\"" \
+            -c "Set :provisioningProfiles:com.andrewcraig.LensBar.Camera \"$CAMERA_PROFILE\"" \
+            ExportOptions.plist
           xcodebuild -exportArchive \
             -archivePath build/LensBar.xcarchive \
             -exportPath build/export \
             -exportOptionsPlist ExportOptions.plist
+
+      - name: Verify signature and entitlements
+        env:
+          TEAM_ID: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: scripts/verify-signing.sh build/export/LensBar.app pre-notarize "arm64"
 
       - name: Notarize & staple app
         env:
@@ -85,6 +109,11 @@ jobs:
             --key key.p8 --key-id "$KEY_ID" --issuer "$ISSUER_ID" \
             --wait
           xcrun stapler staple build/export/LensBar.app
+
+      - name: Verify notarized app
+        env:
+          TEAM_ID: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: scripts/verify-signing.sh build/export/LensBar.app post-staple "arm64"
 
       - name: Package, sign, notarize & staple DMG
         env:
@@ -100,6 +129,7 @@ jobs:
             --wait
           xcrun stapler staple LensBar.dmg
           rm key.p8
+          spctl -a -vv -t open --context context:primary-signature LensBar.dmg
 
       - name: Compute checksum
         id: sha
@@ -118,23 +148,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Import signing certificate
-        env:
-          CERT_B64: ${{ secrets.BUILD_CERT_P12_BASE64 }}
-          CERT_PW: ${{ secrets.BUILD_CERT_PASSWORD }}
-          KC_PW: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          echo "$CERT_B64" | base64 -d > cert.p12
-          security create-keychain -p "$KC_PW" build.keychain
-          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KC_PW" build.keychain
-          security set-keychain-settings -lut 21600 build.keychain
-          security import cert.p12 -k build.keychain -P "$CERT_PW" \
-            -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KC_PW" build.keychain
-          rm cert.p12
+      - name: Set up signing
+        id: signing
+        uses: ./.github/actions/setup-signing
+        with:
+          certificate-p12-base64: ${{ secrets.BUILD_CERT_P12_BASE64 }}
+          certificate-password: ${{ secrets.BUILD_CERT_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+          app-profile-base64: ${{ secrets.APP_PROVISIONING_PROFILE_BASE64 }}
+          camera-profile-base64: ${{ secrets.CAMERA_PROVISIONING_PROFILE_BASE64 }}
+          team-id: ${{ secrets.DEVELOPMENT_TEAM }}
 
       - name: Build & archive
         run: |
@@ -143,19 +166,33 @@ jobs:
             -destination "generic/platform=macOS" \
             -archivePath build/LensBar.xcarchive archive \
             ARCHS="arm64 x86_64" \
-            MARKETING_VERSION="${{ needs.resolve-version.outputs.version }}" \
+            MARKETING_VERSION="${{ needs.resolve-version.outputs.bundle-version }}" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGN_IDENTITY="${{ secrets.DEVELOPER_ID_IDENTITY }}" \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${{ secrets.DEVELOPMENT_TEAM }}" \
-            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime"
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
+            LENSBAR_APP_PROFILE="${{ steps.signing.outputs.app-profile-name }}" \
+            LENSBAR_CAMERA_PROFILE="${{ steps.signing.outputs.camera-profile-name }}"
 
       - name: Export .app
+        env:
+          APP_PROFILE: ${{ steps.signing.outputs.app-profile-name }}
+          CAMERA_PROFILE: ${{ steps.signing.outputs.camera-profile-name }}
         run: |
+          /usr/libexec/PlistBuddy \
+            -c "Set :provisioningProfiles:com.andrewcraig.LensBar \"$APP_PROFILE\"" \
+            -c "Set :provisioningProfiles:com.andrewcraig.LensBar.Camera \"$CAMERA_PROFILE\"" \
+            ExportOptions.plist
           xcodebuild -exportArchive \
             -archivePath build/LensBar.xcarchive \
             -exportPath build/export \
             -exportOptionsPlist ExportOptions.plist
+
+      - name: Verify signature and entitlements
+        env:
+          TEAM_ID: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: scripts/verify-signing.sh build/export/LensBar.app pre-notarize "arm64 x86_64"
 
       - name: Notarize & staple app
         env:
@@ -169,6 +206,11 @@ jobs:
             --key key.p8 --key-id "$KEY_ID" --issuer "$ISSUER_ID" \
             --wait
           xcrun stapler staple build/export/LensBar.app
+
+      - name: Verify notarized app
+        env:
+          TEAM_ID: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: scripts/verify-signing.sh build/export/LensBar.app post-staple "arm64 x86_64"
 
       - name: Package, sign, notarize & staple DMG
         env:
@@ -184,6 +226,7 @@ jobs:
             --wait
           xcrun stapler staple LensBar-universal.dmg
           rm key.p8
+          spctl -a -vv -t open --context context:primary-signature LensBar-universal.dmg
 
       - name: Compute checksum
         id: sha
@@ -212,9 +255,14 @@ jobs:
             LensBar.dmg
             LensBar-universal.dmg
           tag_name: ${{ needs.resolve-version.outputs.tag }}
+          # A dispatch run creates the tag on the commit it built, not the
+          # default branch, so a pre-release can come from a feature branch.
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ needs.resolve-version.outputs.prerelease == 'true' }}
 
   update-homebrew-tap:
     needs: [resolve-version, build-arm64, build-universal, publish-release]
+    if: needs.resolve-version.outputs.prerelease != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
