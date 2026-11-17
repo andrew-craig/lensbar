@@ -8,4 +8,3 @@ DerivedData/
 .claude/settings.local.json
 build/
 .DS_Store
-spike/camera-extension/*.xcodeproj

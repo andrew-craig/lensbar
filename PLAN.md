@@ -208,8 +208,9 @@ activation works from a signed build.
 
 #### Phase 0 results (2026-11-17, OBSBOT Meet SE, Zoom; decision: go)
 
-Spike code lives in `spike/` (harness, property tool, XcodeGen camera-extension
-project) and is throwaway. Full notes are in the closed chalk tasks.
+The throwaway spike code (harness, property tool, XcodeGen camera-extension
+project) was in `spike/`, removed after the release candidate shipped; see
+commit 62e364a for it. Full notes are in the closed chalk tasks.
 
 - **Rate holds:** met for Zoom. With Zoom set to the virtual camera, the physical
   camera stayed at 25.00 fps through join, video toggle, camera switch and back,
