@@ -1,0 +1,67 @@
+# Phase 0 spike (throwaway): template-equivalent CoreMediaIO camera extension
+# plus a host app that activates it. Generate with `xcodegen generate` in this
+# directory. Not part of the real LensBar build.
+name: LensBarSpike
+options:
+  bundleIdPrefix: com.andrewcraig
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: B8A6HLKG3J
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "3"
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_VERSION: "5.0"
+targets:
+  LensBarSpike:
+    type: application
+    platform: macOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andrewcraig.LensBarSpike
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: LensBarSpike
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSCameraUsageDescription: LensBarSpike feeds the physical camera into its virtual camera.
+        LSMinimumSystemVersion: "14.0"
+    entitlements:
+      path: App/App.entitlements
+      properties:
+        com.apple.developer.system-extension.install: true
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.andrewcraig.LensBarSpike
+        com.apple.security.device.camera: true
+    dependencies:
+      - target: LensBarSpikeCamera
+        embed: true
+  LensBarSpikeCamera:
+    type: system-extension
+    platform: macOS
+    sources: [Extension]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andrewcraig.LensBarSpike.Camera
+        PRODUCT_NAME: com.andrewcraig.LensBarSpike.Camera
+        SKIP_INSTALL: YES
+    info:
+      path: Extension/Info.plist
+      properties:
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleDisplayName: LensBarSpike Camera
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSSystemExtensionUsageDescription: Provides the LensBarSpike virtual camera.
+        CMIOExtension:
+          CMIOExtensionMachServiceName: $(TeamIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)
+    entitlements:
+      path: Extension/Extension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.andrewcraig.LensBarSpike

@@ -1,6 +1,8 @@
 # PLAN: LensBar virtual camera
 
-Status: proposal, nothing implemented. Written 2026-11-17.
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 not started.
+Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
+which changed the format-mirroring design (§4.5).
 
 ## 1. Problem
 
@@ -115,13 +117,33 @@ that requirement is accepted; launch-at-login closes the gap. B is not pursued.
 
 ### 4.5 Format and frame-rate advertising
 
-The source stream advertises exactly one format: the resolution currently set
-in LensBar, with exactly one frame rate, the FPS currently set in LensBar
+The source stream advertises exactly one format: the resolution set in
+LensBar, with exactly one frame rate, the FPS set in LensBar
 (`minFrameDuration == maxFrameDuration`, single entry in
-`validFrameDurations`). Clients then have nothing else to select. When the user
-changes format or FPS in LensBar, the app pushes the new descriptor to the
-extension, which replaces the stream's format; clients streaming at that moment
-see a brief renegotiation.
+`validFrameDurations`). Clients then have nothing else to select.
+
+**Changing it while clients are streaming (revised after spike step 5).** Apple's
+header says a stream's `formats` "should not change during the life cycle of the
+associated stream", and Zoom confirms it. Replacing the streams live left Zoom
+frozen on the last frame, and toggling video didn't recover it. Replacing the
+whole device made Zoom switch its video off. Pushing frames at the new
+resolution or frame rate under the *unchanged* advertised format worked: Zoom
+followed both a 25 → 30 fps change and a 720p → 1080p change without any
+disruption. So:
+
+- **Clients streaming (client count > 0):** keep the advertised format and push
+  frames at the new size and rate. The picture and the real frame rate follow
+  LensBar; only the advertised metadata lags behind.
+- **No clients (client count = 0):** update the advertised format by replacing
+  the device (same device ID), so the next client gets the correct descriptor.
+  If the user changes settings mid-call, apply the deferred update as soon as
+  the count reaches 0.
+- Never call `removeStream`/`addStream` on a live device. A removed stream ID
+  can't be re-added to the same device, and a device left with no streams
+  disappears from the system.
+
+Only Zoom has been tested. Another client could reject frames that don't match
+the advertised format, which is a Phase 6 check.
 
 ## 5. Target architecture (design A)
 
@@ -184,6 +206,48 @@ Exit criteria: physical rate holds at 25 fps across every re-trigger scenario
 with no corrective re-assertion needed; added latency is about one frame;
 activation works from a signed build.
 
+#### Phase 0 results (2026-11-17, OBSBOT Meet SE, Zoom; decision: go)
+
+Spike code lives in `spike/` (harness, property tool, XcodeGen camera-extension
+project) and is throwaway. Full notes are in the closed chalk tasks.
+
+- **Rate holds:** met for Zoom. With Zoom set to the virtual camera, the physical
+  camera stayed at 25.00 fps through join, video toggle, camera switch and back,
+  leave and rejoin, the Settings → Video preview, and quitting and relaunching
+  Zoom. Nothing re-asserted the rate. The only reset seen came from selecting
+  the physical camera directly in Zoom, or from Zoom previewing it before the
+  user switched cameras.
+- **Latency:** about 5 ms from sink enqueue to client, against a 40 ms frame.
+  No sink drops.
+- **Activation:** works with Apple Development signing and automatic profiles
+  (this Mac had to be registered in the developer account). Approval took the
+  (i) → toggle → password path in Login Items & Extensions; the first attempt
+  didn't stick. Upgrading needs only a higher `CFBundleVersion` and the
+  `.replace` delegate answer, with no re-approval, and Zoom recovers from the
+  extension restart by itself. **Developer ID + notarized activation is still
+  unproven** and remains the Phase 5 risk.
+- **Client count:** a custom device property (`4cc_lbcc_glob_0000`, String) plus
+  `notifyPropertiesChanged` reaches a `CMIOObjectAddPropertyListenerBlock`
+  in about 40 ms, so polling isn't needed. It needs no camera permission or
+  entitlement on the app side. The CMIO device object ID can change, so look
+  it up by UID and re-add listeners when `kCMIOHardwarePropertyDevices` changes.
+- **Sink feed from the app:** `CMIOStreamCopyBufferQueue` + `CMIODeviceStartStream`
+  + `CMSimpleQueueEnqueue` works from an unsandboxed, unsigned process. The sink
+  stream is the one with `kCMIOStreamPropertyDirection == 0`. CMIO reports a
+  queue capacity of 10.
+- **Format changes:** see §4.5. Live stream or device replacement disrupts Zoom;
+  pushing frames under a fixed format works.
+- **Signals that don't work:** `AVCaptureDevice.isInUseByAnotherApplication`
+  stayed false even while Zoom streamed the physical camera directly. Detect
+  resets via KVO on `activeVideoMinFrameDuration` and the measured rate.
+- **Client behaviour:** Zoom starts and stops the source stream on every video
+  toggle and camera switch (about six sessions in two minutes), so the
+  demand grace period matters.
+- **Camera permission:** it's attributed to the responsible process. A
+  terminal-launched harness only works from a terminal that has camera access.
+- **Oddity:** the OBSBOT dropped off USB once during rapid capture restarts and
+  had to be replugged. Cause unknown; watch for it.
+
 ### Phase 1: capture pipeline refactor (no extension yet)
 
 - Split session lifetime from popover lifetime in `CameraViewModel` /
@@ -203,8 +267,10 @@ This phase is useful on its own and carries no signing risk.
 - Add the `LensBarCamera` system-extension target: provider, device, source and
   sink streams, a single NV12 format whose resolution and frame rate are set by
   the app from LensBar's current settings (the last pushed descriptor is
-  remembered for when the app is not running), client-count property,
-  placeholder frame generator.
+  remembered for when the app is not running, and applied by device replacement
+  only at zero clients, per §4.5), client-count property with
+  `notifyPropertiesChanged`, placeholder frame generator. Fresh stream IDs
+  whenever streams are rebuilt.
 - Entitlements: extension gets app sandbox + app group; app gets
   `system-extension.install` (and stays unsandboxed).
 - Make sure the universal build (`ARCHS="arm64 x86_64"`) covers the extension.
@@ -215,10 +281,12 @@ This phase is useful on its own and carries no signing risk.
   frames re-stamped on the host clock, handle queue-full by dropping.
 - Demand-driven lifecycle: client count > 0 starts the pipeline, 0 stops it
   after a short grace period so quick re-triggers do not restart the camera.
-- Mirroring: on connect, and whenever the user changes resolution or FPS in
-  LensBar (`applyFormat` / `applyFPS`), push the new descriptor to the
-  extension and replace the stream's format. Order the change so the physical
-  camera is reconfigured first and frames in the old format are not enqueued.
+- Mirroring (per revised §4.5): when the user changes resolution or FPS in
+  LensBar (`applyFormat` / `applyFPS`), reconfigure the physical camera and keep
+  enqueuing; frames at the new size and rate flow through the unchanged
+  advertised format. Push the new descriptor to the extension
+  (custom property), which applies it by replacing the device only when its
+  client count is 0, either straight away or deferred until the count reaches 0.
 - Handle camera unplug / replug and app relaunch while a client is streaming.
 
 ### Phase 4: install flow and UI
@@ -231,6 +299,9 @@ This phase is useful on its own and carries no signing risk.
 - Launch at login via `SMAppService.mainApp`, offered when the virtual camera
   is enabled.
 - Reword `NSCameraUsageDescription`.
+- Guidance in the section: "select LensBar Camera in your call app before it
+  previews your webcam", and walk through the approval path in Login Items &
+  Extensions → Camera Extensions → (i).
 
 ### Phase 5: signing, release, CI, docs
 
@@ -261,10 +332,11 @@ format and FPS, and it recovers without the client needing to reselect it.
 
 | Risk | Mitigation |
 |---|---|
-| A target app still opens the physical camera in the background (probing all devices) and resets it | No reliable mitigation exists (re-asserting is the rejected watchdog). Checked per app in spike step 4; an app that does this is a known limitation and is surfaced by the "actual fps" readout. |
-| A client mishandles a format change mid-stream | Spike step 5; if a client cannot follow, document "change settings before joining". |
+| A target app still opens the physical camera in the background (probing all devices) and resets it | Not seen with Zoom (spike). No reliable mitigation exists (re-asserting is the rejected watchdog); an app that does this is a known limitation, surfaced by the "actual fps" readout. |
+| The physical camera was reset before the user switched the client to LensBar Camera (e.g. Zoom previewing the physical camera first) | Seen in the spike. Install UI and README tell the user to select LensBar Camera first; the "actual fps" readout shows when the rate has been lost; reopening the pipeline re-applies the format (a fresh start, not a watchdog). |
+| A client mishandles a format change mid-stream | Confirmed for Zoom with stream/device replacement. Avoided by the revised §4.5: the advertised format changes only with zero clients. Residual risk: another client rejects frames that don't match the advertised format (Phase 6). |
 | Profile-based signing breaks the release pipeline | Do Phase 5 on a pre-release tag via `workflow_dispatch` before merging user-facing UI. |
-| Client-count notifications unreliable | Fall back to 1 s polling of the custom property. |
+| Client-count notifications unreliable | Spike: listeners fire in about 40 ms. Keep a slow (about 5 s) poll as a safety net only. |
 | User friction: approval step, extra camera in every picker | Feature is opt-in; nothing is installed until the user clicks Install. |
 | Browsers and some apps cache the device list | Document "restart the app after installing"; known camera-extension behaviour. |
 | App not running → black virtual camera | Placeholder frame plus launch-at-login. |
@@ -272,8 +344,10 @@ format and FPS, and it recovers without the client needing to reselect it.
 
 ## 8. Open questions
 
-1. Which apps cause the override today? They define the Phase 0 and Phase 6
-   test list.
+1. ~~Which apps cause the override today?~~ Answered: Zoom (desktop) is the
+   test matrix for Phase 0 and Phase 6.
+2. Does a notarized Developer ID build activate the extension the same way the
+   development-signed spike did? This is answered by the Phase 5 pre-release run.
 
 ## 9. Rough size
 
