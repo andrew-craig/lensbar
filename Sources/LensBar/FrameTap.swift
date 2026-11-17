@@ -23,7 +23,17 @@ final class FrameTap: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, Se
 
     let rateMonitor: RateMonitor
     private let queue = DispatchQueue(label: "com.lensbar.frametap", qos: .userInteractive)
-    private let handler = OSAllocatedUnfairLock<FrameHandler?>(initialState: nil)
+    private let handler = OSAllocatedUnfairLock<HandlerBox?>(initialState: nil)
+
+    /// Boxes the closure so the lock's generic state is a class reference.
+    /// Storing a function type directly in `OSAllocatedUnfairLock` makes every
+    /// `withLock` (an `inout` access) write back a reabstraction-thunked copy,
+    /// so each read would wrap the handler in two more thunks — one pair per
+    /// frame, until the capture queue's stack overflows.
+    private final class HandlerBox: Sendable {
+        let call: FrameHandler
+        init(_ call: @escaping FrameHandler) { self.call = call }
+    }
 
     init(rateMonitor: RateMonitor) {
         self.rateMonitor = rateMonitor
@@ -34,7 +44,13 @@ final class FrameTap: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, Se
     /// so it must be cheap and must not block. Phase 3's `VirtualCameraSink`
     /// hooks in here.
     func setFrameHandler(_ newHandler: FrameHandler?) {
-        handler.withLock { $0 = newHandler }
+        let box = newHandler.map(HandlerBox.init)
+        handler.withLock { $0 = box }
+    }
+
+    /// The installed consumer, if any.
+    func currentHandler() -> FrameHandler? {
+        handler.withLock { $0 }?.call
     }
 
     /// Make a new video data output with this tap as its delegate.
@@ -53,7 +69,7 @@ final class FrameTap: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, Se
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         rateMonitor.record(presentationTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-        handler.withLock { $0 }?(sampleBuffer)
+        currentHandler()?(sampleBuffer)
     }
 
     func captureOutput(_ output: AVCaptureOutput,
