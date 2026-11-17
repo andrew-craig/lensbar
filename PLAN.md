@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 3 done in code (2026-11-17; Phase 3 not yet exercised at runtime, see its results). Phases 4 and 5 not started.
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 4 done in code (2026-11-17; Phases 3 and 4 not yet exercised against an activated extension, see their results). Phase 5 not started.
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 
@@ -372,6 +372,44 @@ This phase is useful on its own and carries no signing risk.
 - Guidance in the section: "select LensBar Camera in your call app before it
   previews your webcam", and walk through the approval path in Login Items &
   Extensions → Camera Extensions → (i).
+
+#### Phase 4 results (2026-11-17)
+
+- `ExtensionInstaller` (`@MainActor` `ObservableObject`, owned by the app
+  delegate) submits `OSSystemExtensionRequest`s on the main queue: a properties
+  request for status, activation for Install, deactivation for Remove.
+  Registration state is derived from the records (`ExtensionStatus`:
+  not installed / needs approval / installed; uninstalling records are
+  ignored). While approval is pending it re-reads the registration every 3 s,
+  because a request from an earlier launch never calls back.
+- Replace-on-upgrade (`ExtensionReplacementPolicy`, tested): replace when the
+  bundled build's `CFBundleShortVersionString` or `CFBundleVersion` differs, or
+  the installed one isn't enabled; keep an identical enabled build (replacing
+  restarts the extension and cuts live calls; the resulting `requestCanceled`
+  is not shown as an error). Debug builds pass `alwaysReplace: true`, since
+  their version numbers never change. At launch an installed, allowed
+  extension whose version differs is upgraded without asking; nothing is ever
+  installed or approved on the user's behalf.
+- Running outside `/Applications` shows a hint but doesn't block Install
+  (developer mode allows it); the `unsupportedParentBundleLocation` error is
+  mapped to the same advice. Other `OSSystemExtensionError` codes map to
+  short messages.
+- `VirtualCameraSection` in `ContentView`: Install, approval instructions per
+  macOS version (15+: Login Items & Extensions → Camera Extensions → (i);
+  14: Privacy & Security) with an Open System Settings deep link, status badge
+  (Needs approval / Starting / Ready / Live), client count and measured fps,
+  the "select LensBar Camera before the call app previews your webcam"
+  guidance, inline-confirmed Remove, restart-required notice.
+- `LaunchAtLogin` wraps `SMAppService.mainApp`; its toggle is shown once the
+  extension is installed, with a link to Login Items when the user turned it
+  off there.
+- `NSCameraUsageDescription` no longer names the OBSBOT.
+- Verified: `swift test` (114 tests), Debug app build, the app launches and
+  reads the status (`notInstalled`) from sysextd. **Not verified:** Install,
+  approval, upgrade and Remove against sysextd, which needs the app in
+  `/Applications` and the user's password; the Phase 3 runtime checks are
+  still pending on that too. The old `LensBarSpike.Camera` extension is still
+  `activated enabled` on this Mac and shows up as a second virtual camera.
 
 ### Phase 5: signing, release, CI, docs
 

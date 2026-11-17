@@ -31,6 +31,8 @@ public struct ContentView: View {
                         cameraTerminalSection
                         Divider()
                     }
+                    VirtualCameraSection()
+                    Divider()
                     Button("Quit") { NSApp.terminate(nil) }
                         .frame(maxWidth: .infinity)
                 }

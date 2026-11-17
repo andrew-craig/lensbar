@@ -36,6 +36,8 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("CoreMediaIO"),
+                .linkedFramework("ServiceManagement"),
+                .linkedFramework("SystemExtensions"),
             ]
         ),
         .testTarget(
