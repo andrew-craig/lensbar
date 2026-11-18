@@ -132,53 +132,63 @@ final class IOKitUVCController: @unchecked Sendable {
 
     // MARK: - Capability probing
 
+    private static func probePU(controller: UVCDeviceController, topology: UVCTopology) -> Set<PUControl> {
+        probe(controller: controller, unitID: topology.processingUnit, interface: topology.vcInterface)
+    }
+
+    private static func probeCT(controller: UVCDeviceController, topology: UVCTopology) -> Set<CTControl> {
+        probe(controller: controller, unitID: topology.cameraTerminal, interface: topology.vcInterface)
+    }
+
+    private static func probe<Control: ProbeableControl>(
+        controller: UVCDeviceController,
+        unitID: UInt8?,
+        interface: UInt8
+    ) -> Set<Control> {
+        guard let unitID else { return [] }
+        return Set(Control.allCases.filter {
+            probeControl($0, controller: controller, unitID: unitID, interface: interface)
+        })
+    }
+
+    private static func probeControl<Control: ProbeableControl>(
+        _ ctrl: Control,
+        controller: UVCDeviceController,
+        unitID: UInt8,
+        interface: UInt8
+    ) -> Bool {
+        let (supported, detail) = probeOutcome(
+            controller: controller,
+            unitID: unitID,
+            selector: ctrl.rawValue,
+            interface: interface,
+            dataLength: ctrl.dataLength
+        )
+        let hex = String(format: "%02X", ctrl.rawValue)
+        let verdict = supported ? "supported" : "unsupported"
+        log.debug("""
+            probe \(ctrl.displayName, privacy: .public) unit=\(unitID) selector=0x\(hex, privacy: .public): \
+            \(detail, privacy: .public) -> \(verdict, privacy: .public)
+            """)
+        return supported
+    }
+
     /// GET_INFO returns a 1-byte bitmap; bit 0 = GET supported, bit 1 = SET supported.
     /// UVC 1.5 mandates GET_INFO on every implemented control, but real-world
     /// firmware is uneven — plenty of cameras stall or return zero for GET_INFO
     /// even when GET_CUR works fine. So we treat a non-zero GET_INFO as
     /// authoritative and, if that fails, fall back to a GET_CUR probe: if the
     /// device returns any value for the control's selector, the control exists.
-    private static func probePU(controller: UVCDeviceController, topology: UVCTopology) -> Set<PUControl> {
-        guard let unitID = topology.processingUnit else { return [] }
-        var supported: Set<PUControl> = []
-        for ctrl in PUControl.allCases {
-            if probeControl(
-                controller: controller,
-                unitID: unitID,
-                selector: ctrl.rawValue,
-                interface: topology.vcInterface,
-                dataLength: ctrl.dataLength
-            ) {
-                supported.insert(ctrl)
-            }
-        }
-        return supported
-    }
-
-    private static func probeCT(controller: UVCDeviceController, topology: UVCTopology) -> Set<CTControl> {
-        guard let unitID = topology.cameraTerminal else { return [] }
-        var supported: Set<CTControl> = []
-        for ctrl in CTControl.allCases {
-            if probeControl(
-                controller: controller,
-                unitID: unitID,
-                selector: ctrl.rawValue,
-                interface: topology.vcInterface,
-                dataLength: ctrl.dataLength
-            ) {
-                supported.insert(ctrl)
-            }
-        }
-        return supported
-    }
-
-    private static func probeControl(
+    ///
+    /// Returns the verdict and a short description of how it was reached, for the log.
+    private static func probeOutcome(
         controller: UVCDeviceController,
         unitID: UInt8,
         selector: UInt8,
         interface: UInt8,
         dataLength: Int
-    ) -> Bool {
+    ) -> (supported: Bool, detail: String) {
+        let infoDetail: String
         do {
             let info = try controller.getRequest(
                 UVCRequest.getInfo.rawValue,
@@ -188,12 +198,11 @@ final class IOKitUVCController: @unchecked Sendable {
                 length: 1
             )
             if let first = info.first, first != 0 {
-                log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO=0x\(String(format: "%02X", first), privacy: .public) -> supported")
-                return true
+                return (true, "GET_INFO=0x\(String(format: "%02X", first))")
             }
-            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO returned 0 — trying GET_CUR fallback")
+            infoDetail = "GET_INFO returned 0"
         } catch {
-            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_INFO failed (\(error.localizedDescription, privacy: .public)) — trying GET_CUR fallback")
+            infoDetail = "GET_INFO failed (\(error.localizedDescription))"
         }
         do {
             let data = try controller.getRequest(
@@ -208,14 +217,11 @@ final class IOKitUVCController: @unchecked Sendable {
             // value — treat that as "control isn't really there" so we don't
             // surface a slider that can't read or write a value.
             guard !data.isEmpty else {
-                log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR empty -> unsupported")
-                return false
+                return (false, "\(infoDetail), GET_CUR empty")
             }
-            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR ok (\(data.count) bytes) -> supported")
-            return true
+            return (true, "\(infoDetail), GET_CUR ok (\(data.count) bytes)")
         } catch {
-            log.debug("probe selector=0x\(String(format: "%02X", selector), privacy: .public) unit=\(unitID) GET_CUR failed (\(error.localizedDescription, privacy: .public)) -> unsupported")
-            return false
+            return (false, "\(infoDetail), GET_CUR failed (\(error.localizedDescription))")
         }
     }
 
@@ -273,3 +279,12 @@ final class IOKitUVCController: @unchecked Sendable {
         )
     }
 }
+
+/// The shape `IOKitUVCController.probe` needs from `PUControl` and `CTControl`.
+private protocol ProbeableControl: RawRepresentable<UInt8>, CaseIterable, Hashable {
+    var dataLength: Int { get }
+    var displayName: String { get }
+}
+
+extension PUControl: ProbeableControl {}
+extension CTControl: ProbeableControl {}
