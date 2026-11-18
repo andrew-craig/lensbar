@@ -14,4 +14,3 @@ identifier_name:
 excluded:
   - .build
   - build
-  - spike
