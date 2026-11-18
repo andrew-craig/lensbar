@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 done in code (2026-11-17; Phases 3 and 4 not yet exercised against an activated extension, and Phase 5 not yet run in CI, see their results).
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 done and merged to `main` (PR #21), shipped in v0.2.0 after the 0.2.0-rc1 pre-release run (2026-11-17). Left: the Phase 3 and 4 runtime checks against an activated extension, and the Phase 6 verification matrix (chalk task_804e).
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 
