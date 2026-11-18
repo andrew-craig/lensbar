@@ -167,7 +167,7 @@ final class IOKitUVCController: @unchecked Sendable {
         let hex = String(format: "%02X", ctrl.rawValue)
         let verdict = supported ? "supported" : "unsupported"
         log.debug("""
-            probe \(ctrl.displayName, privacy: .public) unit=\(unitID) selector=0x\(hex, privacy: .public): \
+            probe \(ctrl.displayName, privacy: .public) unit=\(unitID, privacy: .public) selector=0x\(hex, privacy: .public): \
             \(detail, privacy: .public) -> \(verdict, privacy: .public)
             """)
         return supported
