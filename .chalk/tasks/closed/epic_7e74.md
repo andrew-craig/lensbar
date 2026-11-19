@@ -12,3 +12,5 @@ created_at: 2026-11-17T00:05:58Z
 updated_at: 2026-11-18T22:03:15Z
 ---
 Implements PLAN.md. Ship a CMIOExtension virtual camera (design A: the app captures and pushes frames into a sink stream) so conferencing apps never open the physical camera and cannot reset its frame rate. Phases 0-6 are child tasks; dependencies are recorded with blocked_by.
+
+Closed 2026-11-19. Phases 0-5 are done and shipped in v0.2.0. Phase 6 (task_804e, verification matrix) has not been done; that task was closed without it.
