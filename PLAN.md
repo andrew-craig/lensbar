@@ -1,6 +1,6 @@
 # PLAN: LensBar virtual camera
 
-Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 done and merged to `main` (PR #21), shipped in v0.2.0 after the 0.2.0-rc1 pre-release run (2026-11-17). Left: the Phase 3 and 4 runtime checks against an activated extension, and the Phase 6 verification matrix (chalk task_804e).
+Status: Phase 0 spike done, decision **go** (2026-11-17). Phases 1 to 5 done and merged to `main` (PR #21), shipped in v0.2.0 after the 0.2.0-rc1 pre-release run (2026-11-17). The Phase 6 verification matrix has **not** been run; its chalk task (task_804e) and the epic were closed on 2026-11-19 without it.
 Written 2026-11-17; updated the same day with spike results (§6, Phase 0 results),
 which changed the format-mirroring design (§4.5).
 
@@ -493,6 +493,9 @@ sleep/wake, unplug/replug, LensBar quit and relaunch mid-call, popover
 open/closed, change resolution and FPS in LensBar mid-call}. Pass = measured
 physical rate stays at the LensBar-set FPS, the virtual camera reports the same
 format and FPS, and it recovers without the client needing to reselect it.
+
+**Not done.** The matrix has not been run. Its chalk task (task_804e) was
+closed on 2026-11-19 without it, so none of the cases above have been checked.
 
 ## 7. Risks
 
