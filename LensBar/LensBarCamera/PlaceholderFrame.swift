@@ -1,12 +1,11 @@
 import CoreGraphics
 import CoreMedia
-import CoreText
 import CoreVideo
 import Foundation
 import VirtualCameraKit
 
-/// The frame LensBar Camera shows while the app isn't feeding it: dark grey
-/// with "Open LensBar" centred. Rendered once per format as an NV12 luma plane
+/// The frame LensBar Camera shows while the app isn't feeding it: black with
+/// the LensBar mark in the top-left corner. Rendered once per format as an NV12 luma plane
 /// (chroma is neutral grey), then copied into a pooled pixel buffer per frame.
 struct PlaceholderFrame {
     let format: VirtualCameraFormat
@@ -71,7 +70,7 @@ struct PlaceholderFrame {
         }
     }
 
-    /// Video-range luma: 16 is black, 235 white. Text is drawn in a grey
+    /// Video-range luma: 16 is black, 235 white. The icon is drawn in a grey
     /// bitmap and scaled into that range.
     private static func renderLuma(width: Int, height: Int) -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: width * height)
@@ -79,29 +78,29 @@ struct PlaceholderFrame {
             guard let ctx = CGContext(data: buf.baseAddress, width: width, height: height, bitsPerComponent: 8,
                                       bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
                                       bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
-            ctx.setFillColor(gray: 0.16, alpha: 1)
+            ctx.setFillColor(gray: 0, alpha: 1)
             ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            drawCentred("LensBar Camera", size: CGFloat(height) / 12, gray: 0.9,
-                        yOffset: CGFloat(height) / 20, in: ctx, width: width, height: height)
-            drawCentred("Open LensBar to start the video", size: CGFloat(height) / 26, gray: 0.6,
-                        yOffset: -CGFloat(height) / 20, in: ctx, width: width, height: height)
+            let iconSize = CGFloat(height) / 9
+            let margin = CGFloat(height) / 24
+            drawIcon(in: ctx, rect: CGRect(x: margin, y: CGFloat(height) - margin - iconSize,
+                                           width: iconSize, height: iconSize), gray: 0.85)
         }
         return pixels.map { UInt8(16 + (Int($0) * 219) / 255) }
     }
 
-    private static func drawCentred(_ text: String, size: CGFloat, gray: CGFloat, yOffset: CGFloat,
-                                    in ctx: CGContext, width: Int, height: Int) {
-        let font = CTFontCreateUIFontForLanguage(.system, size, nil)
-            ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
-        let colour = CGColor(gray: gray, alpha: 1)
-        let attrs = [kCTFontAttributeName: font, kCTForegroundColorAttributeName: colour] as CFDictionary
-        guard let attributed = CFAttributedStringCreate(kCFAllocatorDefault, text as CFString, attrs) else { return }
-        let line = CTLineCreateWithAttributedString(attributed)
-        let bounds = CTLineGetBoundsWithOptions(line, .useOpticalBounds)
-        // A bitmap context stores its top row first, like the pixel buffer, so
-        // no flip is needed. Origin is bottom-left; positive yOffset moves up.
-        ctx.textPosition = CGPoint(x: (CGFloat(width) - bounds.width) / 2 - bounds.minX,
-                                   y: CGFloat(height) / 2 + yOffset - bounds.height / 2 - bounds.minY)
-        CTLineDraw(line, ctx)
+    /// The LensBar mark (Lensbar.svg: a ring with a dot up and to the right),
+    /// fitted to `rect`. The SVG's visible extent is 34 units (ring radius 15
+    /// plus half the 4-unit stroke, either side of centre 22). A bitmap context
+    /// stores its top row first, like the pixel buffer, so no flip is needed;
+    /// origin is bottom-left, so the dot's SVG y (down) is negated.
+    private static func drawIcon(in ctx: CGContext, rect: CGRect, gray: CGFloat) {
+        let s = rect.width / 34
+        let centre = CGPoint(x: rect.midX, y: rect.midY)
+        ctx.setStrokeColor(gray: gray, alpha: 1)
+        ctx.setFillColor(gray: gray, alpha: 1)
+        ctx.setLineWidth(4 * s)
+        ctx.strokeEllipse(in: CGRect(x: centre.x - 15 * s, y: centre.y - 15 * s, width: 30 * s, height: 30 * s))
+        let dot = CGPoint(x: centre.x + 4.5 * s, y: centre.y + 2.5 * s)
+        ctx.fillEllipse(in: CGRect(x: dot.x - 4.5 * s, y: dot.y - 4.5 * s, width: 9 * s, height: 9 * s))
     }
 }
