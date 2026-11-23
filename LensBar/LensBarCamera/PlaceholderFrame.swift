@@ -81,8 +81,10 @@ struct PlaceholderFrame {
             ctx.setFillColor(gray: 0, alpha: 1)
             ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
             let iconSize = CGFloat(height) / 9
-            let margin = CGFloat(height) / 24
-            drawIcon(in: ctx, rect: CGRect(x: margin, y: CGFloat(height) - margin - iconSize,
+            // Inset 1/24 of the height plus 5% of each dimension.
+            let left = CGFloat(height) / 24 + CGFloat(width) * 0.05
+            let top = CGFloat(height) / 24 + CGFloat(height) * 0.05
+            drawIcon(in: ctx, rect: CGRect(x: left, y: CGFloat(height) - top - iconSize,
                                            width: iconSize, height: iconSize), gray: 0.85)
         }
         return pixels.map { UInt8(16 + (Int($0) * 219) / 255) }
